@@ -5,6 +5,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import '../game/audio.dart';
+import '../game/save.dart';
 import 'game_screen.dart';
 import 'intro_screen.dart';
 
@@ -51,6 +52,9 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
       setState(() {});
     })
       ..start();
+    SaveStore.load().then((_) {
+      if (mounted) setState(() {});
+    });
     GameAudio.instance.init().then((_) {
       if (!mounted) return;
       audioReady = true;
@@ -65,14 +69,16 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   }
 
   /// La primera vez se ve la intro; después se entra directamente a jugar.
-  void _go({bool intro = false}) {
+  /// Con partida guardada, tocar la pantalla continúa; «NUEVA PARTIDA» empieza de cero.
+  void _go({bool intro = false, bool fresh = false}) {
     if (leaving || t < 1.5) return;
     leaving = true;
     GameAudio.instance.play(Sfx.glitch, volume: 0.6);
-    final showIntro = intro || !IntroScreen.seen;
+    final resume = SaveStore.hasSave && !fresh && !intro;
+    final showIntro = !resume && (intro || !IntroScreen.seen);
     Navigator.of(context).pushReplacement(PageRouteBuilder(
       transitionDuration: const Duration(milliseconds: 900),
-      pageBuilder: (_, _, _) => showIntro ? const IntroScreen() : const GameScreen(),
+      pageBuilder: (_, _, _) => showIntro ? const IntroScreen() : GameScreen(resume: resume),
       transitionsBuilder: (_, a, _, child) => FadeTransition(opacity: a, child: child),
     ));
   }
@@ -92,6 +98,27 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
           },
           child: Stack(children: [
             Positioned.fill(child: CustomPaint(painter: _SplashPainter(t, lightning, face, rng))),
+            if (SaveStore.hasSave && t > 2.6)
+              Positioned(
+                left: 20,
+                bottom: 16,
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text(
+                    'TOCA PARA CONTINUAR',
+                    style: TextStyle(fontFamily: 'monospace', fontSize: 13, color: Color(0xFFBBBBBB), letterSpacing: 2),
+                  ),
+                  GestureDetector(
+                    onTap: () => _go(fresh: true),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 10),
+                      child: Text(
+                        'NUEVA PARTIDA ›',
+                        style: TextStyle(fontFamily: 'monospace', fontSize: 14, color: Color(0xFF888888), letterSpacing: 2),
+                      ),
+                    ),
+                  ),
+                ]),
+              ),
             if (IntroScreen.seen && t > 2.6)
               Positioned(
                 right: 20,

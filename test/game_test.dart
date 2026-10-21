@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 import 'dart:ui' show PictureRecorder;
 
@@ -35,6 +36,83 @@ void main() {
       expect(w.manuscriptFloor, isNot(w.glassesFloor));
       expect(w.floors.expand((f) => f.pcs).where((p) => p.working).length, 2);
     }
+  });
+
+  test('armas y munición siempre presentes y alcanzables (sin bloqueos)', () {
+    for (var seed = 0; seed < 150; seed++) {
+      final w = generateWorld(Random(seed));
+      final why = 'seed $seed';
+      final crates = w.floors.expand((f) => f.crates).toList();
+      expect(crates.where((c) => c.loot == ItemType.pistol).length, 3, reason: why);
+      expect(crates.where((c) => c.loot == ItemType.ammo).length, 14, reason: why);
+      expect(w.floors[groundFloor].crates.where((c) => c.loot == ItemType.pipe), isNotEmpty, reason: why);
+      expect(w.floors[roofFloor].items.where((i) => i.type == ItemType.ammo).length, 2, reason: why);
+      for (final f in w.floors) {
+        // Todo lo que tiene botín o es clave se puede alcanzar desde la llegada.
+        final seen = <Point<int>>{arrivalTile(f)};
+        final queue = [arrivalTile(f)];
+        while (queue.isNotEmpty) {
+          final t = queue.removeLast();
+          for (final d in const [Point(1, 0), Point(-1, 0), Point(0, 1), Point(0, -1)]) {
+            final n = t + d;
+            if (n.x < 0 || n.y < 0 || n.x >= mapW || n.y >= mapH || f.solidAt(n.x, n.y) || !seen.add(n)) continue;
+            queue.add(n);
+          }
+        }
+        bool near(Offset pos) {
+          final c = tileOf(pos);
+          for (var dx = -1; dx <= 1; dx++) {
+            for (var dy = -1; dy <= 1; dy++) {
+              if (seen.contains(Point(c.x + dx, c.y + dy))) return true;
+            }
+          }
+          return false;
+        }
+
+        for (final c in f.crates.where((c) => c.loot != null)) {
+          expect(near(c.pos), isTrue, reason: '$why planta ${f.index} ${c.loot}');
+        }
+        for (final pc in f.pcs.where((p) => p.working)) {
+          expect(near(pc.pos), isTrue, reason: '$why planta ${f.index} pc');
+        }
+        for (final it in f.items) {
+          expect(near(it.pos), isTrue, reason: '$why planta ${f.index} ${it.type}');
+        }
+      }
+    }
+  });
+
+  test('el punto de control guarda y recupera la partida', () {
+    final g = Game();
+    expect(g.pendingSave, isNotNull, reason: 'guarda al empezar');
+    final f = g.world.floors[3];
+    f.crates[0].searched = true;
+    f.crates[4].searched = true;
+    g.p.hasGlasses = true;
+    g.p.ammo = 7;
+    g.p.inv[ItemType.water] = 2;
+    g.p.hp = 1;
+    g.boxDone = true;
+    g.fi = 3;
+    g.p.pos = tileCenter(f.down!);
+    final box = g.world.floors[g.world.boxFloor];
+    box.boss = Boss(box.box!)..hp = 0;
+    final json = jsonDecode(jsonEncode(g.snapshot())) as Map<String, dynamic>;
+    final r = Game(save: json);
+    expect(r.seed, g.seed);
+    for (var i = 0; i < floorCount; i++) {
+      expect(r.world.floors[i].tiles, g.world.floors[i].tiles, reason: 'mismo mapa, planta $i');
+    }
+    expect(r.world.boxFloor, g.world.boxFloor);
+    expect(r.fi, 3);
+    expect(r.p.pos, g.p.pos);
+    expect(r.p.hasGlasses, isTrue);
+    expect(r.p.ammo, 7);
+    expect(r.p.inv[ItemType.water], 2);
+    expect(r.p.hp, maxPoints / 2, reason: 'vuelve con media vida como mínimo');
+    expect(r.boxDone, isTrue);
+    expect(r.world.floors[3].crates.where((c) => c.searched).length, 2);
+    expect(r.world.floors[g.world.boxFloor].boss!.alive, isFalse);
   });
 
   testWidgets('la simulación y el render aguantan varios minutos de juego', (tester) async {

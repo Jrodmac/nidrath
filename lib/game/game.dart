@@ -85,6 +85,7 @@ class Spark {
 class Game {
   final Random rng = Random();
   final GameAudio audio = GameAudio.instance;
+  late final int seed; // el mapa se regenera igual a partir de la semilla
   late final World world;
   late final Player p;
   int fi = groundFloor;
@@ -158,13 +159,128 @@ class Game {
   double firstEncounterT = 18;
   double switchAlertT = 0;
 
-  Game() {
-    world = generateWorld(rng);
+  /// Punto de control pendiente de guardar (lo recoge la pantalla de juego).
+  Map<String, dynamic>? pendingSave;
+
+  Game({Map<String, dynamic>? save}) {
+    seed = (save?['seed'] as int?) ?? Random().nextInt(1 << 31);
+    world = generateWorld(Random(seed));
     p = Player(world.start);
     firstEncounterT = 18 + rng.nextDouble() * 10;
+    if (save != null) {
+      _restore(save);
+    } else {
+      say('Has entrado. La puerta se cierra detrás de ti.', const Color(0xFFBBBBBB));
+      say('Encuentra la Caja de Otros Mundos.', const Color(0xFFB98CFF));
+      _checkpoint();
+    }
     _updateLight();
-    say('Has entrado. La puerta se cierra detrás de ti.', const Color(0xFFBBBBBB));
-    say('Encuentra la Caja de Otros Mundos.', const Color(0xFFB98CFF));
+  }
+
+  // --- Puntos de control -----------------------------------------------------------
+
+  void _checkpoint() => pendingSave = snapshot();
+
+  Map<String, dynamic> snapshot() => {
+        'seed': seed,
+        'fi': fi,
+        'x': p.pos.dx,
+        'y': p.pos.dy,
+        'time': time,
+        'kills': kills,
+        'hp': p.hp,
+        'energy': p.energy,
+        'dark': p.darkWound,
+        'pistol': p.hasPistol,
+        'pipe': p.hasPipe,
+        'sheet': p.hasManuscript,
+        'revealed': p.manuscriptRevealed,
+        'glasses': p.hasGlasses,
+        'wearing': p.wearingGlasses,
+        'spell': p.spellLearned,
+        'ammo': p.ammo,
+        'inv': {for (final e in p.inv.entries) e.key.name: e.value},
+        'boxDone': boxDone,
+        'firstSicario': firstSicarioSeen,
+        'floors': [
+          for (final f in world.floors)
+            {
+              'visited': !f.firstVisit,
+              'cap': f.enemyCap,
+              'searched': [for (var i = 0; i < f.crates.length; i++) if (f.crates[i].searched) i],
+              'pcs': [for (var i = 0; i < f.pcs.length; i++) if (f.pcs[i].used) i],
+              'lit': [for (var i = 0; i < f.rooms.length; i++) if (f.rooms[i].lit) i],
+              'items': [for (final it in f.items) [it.type.name, it.pos.dx, it.pos.dy]],
+              if (f.boss != null && !f.boss!.alive) 'boss': [f.boss!.pos.dx, f.boss!.pos.dy],
+            }
+        ],
+      };
+
+  void _restore(Map<String, dynamic> s) {
+    fi = s['fi'] as int;
+    p.pos = Offset((s['x'] as num).toDouble(), (s['y'] as num).toDouble());
+    time = (s['time'] as num).toDouble();
+    kills = s['kills'] as int;
+    // Volver con media vida como mínimo: si no, un mal guardado sería una trampa.
+    p.hp = max((s['hp'] as num).toDouble(), maxPoints / 2);
+    p.energy = maxPoints;
+    p.darkWound = s['dark'] as bool;
+    p.hasPistol = s['pistol'] as bool;
+    p.hasPipe = s['pipe'] as bool;
+    p.hasManuscript = s['sheet'] as bool;
+    p.manuscriptRevealed = s['revealed'] as bool;
+    p.hasGlasses = s['glasses'] as bool;
+    p.wearingGlasses = s['wearing'] as bool;
+    p.spellLearned = s['spell'] as bool;
+    p.ammo = s['ammo'] as int;
+    (s['inv'] as Map<String, dynamic>).forEach((k, v) => p.inv[ItemType.values.byName(k)] = v as int);
+    boxDone = s['boxDone'] as bool;
+    firstSicarioSeen = s['firstSicario'] as bool;
+    final floors = s['floors'] as List;
+    for (var i = 0; i < world.floors.length; i++) {
+      final f = world.floors[i];
+      final d = floors[i] as Map<String, dynamic>;
+      f.firstVisit = !(d['visited'] as bool);
+      f.enemyCap = d['cap'] as int;
+      for (final c in d['searched'] as List) {
+        f.crates[c as int].searched = true;
+      }
+      for (final c in d['pcs'] as List) {
+        f.pcs[c as int].used = true;
+      }
+      for (final r in d['lit'] as List) {
+        f.rooms[r as int].lit = true;
+      }
+      f.items
+        ..clear()
+        ..addAll([
+          for (final it in d['items'] as List)
+            GroundItem(Offset((it[1] as num).toDouble(), (it[2] as num).toDouble()), ItemType.values.byName(it[0] as String)),
+        ]);
+      final b = d['boss'] as List?;
+      if (b != null) {
+        f.boss = Boss(Offset((b[0] as num).toDouble(), (b[1] as num).toDouble()))
+          ..hp = 0
+          ..deadT = 5;
+      }
+      if (boxDone && i != roofFloor) f.spawnTimer = min(f.spawnTimer, 8 + rng.nextDouble() * 10);
+    }
+    _clearArrival();
+    big(floorNames[fi].toUpperCase(), const Color(0xFFCCCCCC), 1.8);
+    say('Vuelves en ti. No ha terminado.', const Color(0xFFBBBBBB));
+    if (fi == roofFloor) _roofAmbush();
+  }
+
+  /// Nadie te espera pegado a la escalera al llegar.
+  void _clearArrival() {
+    for (final e in floor.enemies) {
+      if (e.alive && (e.pos - p.pos).distance < 7) {
+        final far = _farTile(14);
+        if (far != null) e.pos = tileCenter(far);
+        e.state = EState.patrol;
+        e.path = [];
+      }
+    }
   }
 
   void say(String text, [Color color = const Color(0xFFDDDDDD)]) {
@@ -918,14 +1034,7 @@ class Game {
     pendingFloor = null;
     fi = target;
     p.pos = tileCenter(pendingArrival!);
-    for (final e in floor.enemies) {
-      if (e.alive && (e.pos - p.pos).distance < 7) {
-        final far = _farTile(14);
-        if (far != null) e.pos = tileCenter(far);
-        e.state = EState.patrol;
-        e.path = [];
-      }
-    }
+    _clearArrival();
     big(floorNames[fi].toUpperCase(), const Color(0xFFCCCCCC), 1.8);
     if (floor.firstVisit) {
       floor.firstVisit = false;
@@ -941,6 +1050,7 @@ class Game {
       ];
       if (intros[fi].isNotEmpty) say(intros[fi], const Color(0xFFAAAAAA));
     }
+    _checkpoint();
     if (fi == roofFloor && !roofWave) _roofAmbush();
   }
 
@@ -1408,11 +1518,13 @@ class Game {
     say('Metes el invento en la caja. Se cierra sola y se apaga.', const Color(0xFFFFE6B0));
     say('Arriba revienta una puerta: la de la azotea. Es tu única salida.', const Color(0xFFFFE6B0));
     say('Sirenas fuera. Vienen todos a por ti.', const Color(0xFFFF9090));
+    say('Punto de control guardado.', const Color(0xFF777777));
     for (final f in world.floors) {
       if (f.index == roofFloor) continue;
       f.enemyCap += 2;
       f.spawnTimer = min(f.spawnTimer, 6 + rng.nextDouble() * 10);
     }
+    _checkpoint();
   }
 
   // --- El carnicero --------------------------------------------------------------
@@ -1463,6 +1575,9 @@ class Game {
     shake = 12;
     audio.play(Sfx.scream, volume: 0.4);
     big('¡ABATIDO!', const Color(0xFFFFE6B0), 2);
+    // Llevaba munición encima.
+    floor.items.add(GroundItem(b.pos + const Offset(0.3, 0.2), ItemType.ammo));
+    floor.items.add(GroundItem(b.pos + const Offset(-0.3, 0.25), ItemType.ammo));
     say('El carnicero se desploma junto a la caja. Ya nadie la guarda.', const Color(0xFFFFE6B0));
   }
 

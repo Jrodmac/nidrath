@@ -912,7 +912,9 @@ World generateWorld(Random rng) {
   // La hoja y las gafas, en plantas distintas y sin ninguna pista.
   final keyFloors = [for (var i = 0; i < roofFloor; i++) i]..shuffle(rng);
   void hide(int fi, ItemType t) {
-    final options = floors[fi].crates.where((c) => c.loot != ItemType.pipe && c.loot != ItemType.manuscript).toList();
+    // Nunca a costa de un arma o de munición.
+    const keep = {ItemType.pipe, ItemType.manuscript, ItemType.pistol, ItemType.ammo};
+    final options = floors[fi].crates.where((c) => !keep.contains(c.loot)).toList();
     final c = options[rng.nextInt(options.length)];
     c.loot = t;
     c.rat = false;
@@ -924,6 +926,16 @@ World generateWorld(Random rng) {
   allPcs.shuffle(rng);
   allPcs.first.working = true;
   allPcs.firstWhere((p) => !floors.any((f) => f.pcs.contains(p) && f.pcs.contains(allPcs.first))).working = true;
+
+  // Junto a la puerta de la azotea, la reserva de los sicarios.
+  final roof = floors[roofFloor];
+  final stash = [
+    for (final t in roof.freeTiles)
+      if (t != roof.down && (t.x - roof.down!.x).abs() <= 2 && (t.y - roof.down!.y).abs() <= 2) t
+  ]..shuffle(rng);
+  for (final (i, type) in [ItemType.ammo, ItemType.ammo, ItemType.medkit].indexed) {
+    if (i < stash.length) roof.items.add(GroundItem(tileCenter(stash[i]), type));
+  }
 
   return World(floors, start, boxFloor, keyFloors[0], keyFloors[1]);
 }

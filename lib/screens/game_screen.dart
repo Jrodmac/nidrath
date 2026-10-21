@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../game/audio.dart';
 import '../game/game.dart';
+import '../game/save.dart';
 import '../game/painter.dart';
 import '../game/sprites.dart';
 import '../game/world.dart';
@@ -13,7 +14,9 @@ import 'ending_screen.dart';
 import 'splash_screen.dart';
 
 class GameScreen extends StatefulWidget {
-  const GameScreen({super.key});
+  /// true: continuar desde el último punto de control.
+  final bool resume;
+  const GameScreen({super.key, this.resume = false});
 
   @override
   State<GameScreen> createState() => _GameScreenState();
@@ -39,7 +42,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
-    game = Game();
+    game = Game(save: widget.resume ? SaveStore.read() : null);
     GameAudio.instance.startDrone();
     _ticker = createTicker(_tick)..start();
     WidgetsBinding.instance.addObserver(this);
@@ -90,9 +93,15 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     input.move = _keyboardMove() ?? (_joyOrigin == null ? Offset.zero : _joyKnob / _joyRadius);
     input.run = HardwareKeyboard.instance.isShiftPressed || _runHeld;
     game.update(dt, input);
+    final save = game.pendingSave;
+    if (save != null) {
+      game.pendingSave = null;
+      SaveStore.write(save);
+    }
     // Tras subir al helicóptero: el vídeo final.
     if (game.won && game.endT > 4 && !_endingShown) {
       _endingShown = true;
+      SaveStore.clear();
       _ticker.stop();
       Navigator.of(context).pushReplacement(PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 1200),
@@ -152,9 +161,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     return null;
   }
 
-  void _restart() {
+  void _restart({bool resume = false}) {
     setState(() {
-      game = Game();
+      game = Game(save: resume ? SaveStore.read() : null);
       paused = false;
       _runHeld = false;
       GameAudio.instance.startDrone();
@@ -605,7 +614,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
             Text('Sicarios abatidos: ${g.kills} · Tiempo: ${(g.time ~/ 60)}:${(g.time % 60).floor().toString().padLeft(2, '0')}',
                 style: _hudText(12, const Color(0xFF999999))),
             const SizedBox(height: 20),
-            _menuButton('JUGAR DE NUEVO', _restart),
+            if (!won && SaveStore.hasSave)
+              _menuButton('CONTINUAR', () => _restart(resume: true)),
+            _menuButton('NUEVA PARTIDA', _restart),
             _menuButton('SALIR', _exitToTitle),
           ]),
           ),
