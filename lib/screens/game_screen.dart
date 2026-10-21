@@ -562,6 +562,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                 Text(
                   'Joystick: moverse · al fondo o botón verde: correr\n'
                   'Botón rojo: atacar (solo con arma)\n'
+                  'Barra: mira al sicario y pulsa: te lanzas a por él\n'
                   'Botón de acción: registrar, esconderse, usar, escaleras\n'
                   'Toca los objetos de abajo para usarlos\n'
                   'Ascensor: botón de acción y elige planta\n\n'

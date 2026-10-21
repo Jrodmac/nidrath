@@ -637,27 +637,47 @@ class Game {
       return;
     }
     if (p.hasPistol && p.ammo == 0) audio.play(Sfx.cock, volume: 0.6);
-    // Barra de hierro.
+    // Barra de hierro: te lanzas a por el que tengas delante y le golpeas.
     p.attackCd = 0.5;
     audio.play(Sfx.swing, volume: 0.7);
-    const range = 1.3;
-    const dmg = 2;
-    final b = floor.boss;
-    if (b != null && b.alive) {
-      final rel = b.pos - p.pos;
-      if (rel.distance <= range + 0.2 && angleDiff(rel.direction, p.angle) <= 1.0) {
-        audio.play(Sfx.punch);
-        _hitBoss(0.5);
-        return;
+    const reach = 3.0, range = 1.5;
+    final boss = floor.boss;
+    Offset? foe;
+    var bestD = reach;
+    void consider(Offset pos) {
+      final rel = pos - p.pos;
+      if (rel.distance > bestD || angleDiff(rel.direction, p.angle) > 1.0 || !lineOfSight(floor, p.pos, pos)) return;
+      bestD = rel.distance;
+      foe = pos;
+    }
+
+    if (boss != null && boss.alive) consider(boss.pos);
+    for (final e in floor.enemies) {
+      if (e.alive) consider(e.pos);
+    }
+    final hitAt = foe;
+    if (hitAt == null) {
+      if (unarmedMsgT <= 0) {
+        unarmedMsgT = 4;
+        say('La barra corta el aire. Acércate más.', const Color(0xFF999999));
       }
+      return;
+    }
+    final rel = hitAt - p.pos;
+    p.angle = rel.direction;
+    if (rel.distance > 0.9) {
+      p.pos = moveWithCollision(floor, p.pos, rel / rel.distance * (rel.distance - 0.8), 0.28);
+      shake = max(shake, 3);
+    }
+    if (boss != null && boss.alive && (boss.pos - p.pos).distance <= range + 0.2) {
+      audio.play(Sfx.punch);
+      _hitBoss(0.5);
+      return;
     }
     for (final e in floor.enemies) {
-      if (!e.alive) continue;
-      final rel = e.pos - p.pos;
-      if (rel.distance > range) continue;
-      if (angleDiff(rel.direction, p.angle) > 1.0) continue;
+      if (!e.alive || (e.pos - p.pos).distance > range) continue;
       audio.play(Sfx.punch);
-      _hitEnemy(e, dmg);
+      _hitEnemy(e, 2);
       break;
     }
   }

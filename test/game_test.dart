@@ -82,6 +82,26 @@ void main() {
     }
   });
 
+  test('la barra alcanza a un sicario que se ha parado a disparar', () {
+    final g = Game();
+    final input = GameInput();
+    final f = g.floor;
+    for (final fl in g.world.floors) {
+      fl.enemies.clear();
+      fl.spawnTimer = 1e9;
+    }
+    // Un pasillo libre de 4 casillas en horizontal.
+    final t = f.freeTiles.firstWhere((t) => [1, 2, 3, 4].every((i) => !f.solidAt(t.x + i, t.y)));
+    g.p.pos = tileCenter(t);
+    g.p.angle = 0;
+    g.p.hasPipe = true;
+    final e = Enemy(tileCenter(t) + const Offset(2.6, 0), pi, 0);
+    f.enemies.add(e);
+    input.attack = true;
+    g.update(1 / 60, input);
+    expect(e.alive, isFalse);
+  });
+
   test('el punto de control guarda y recupera la partida', () {
     final g = Game();
     expect(g.pendingSave, isNotNull, reason: 'guarda al empezar');
