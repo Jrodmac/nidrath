@@ -20,9 +20,6 @@ class SaveStore {
     }
   }
 
-  /// Nombre de la planta guardada, para el botón de continuar.
-  static int? get savedFloor => read()?['fi'] as int?;
-
   static Future<void> load() async {
     try {
       _cached = (await SharedPreferences.getInstance()).getString(_key);
