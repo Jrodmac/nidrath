@@ -21,6 +21,8 @@ class Player {
   double angle = -pi / 2;
   double hp = maxPoints;
   double energy = maxPoints;
+  /// Hasta dónde se recupera descansando; baja con el hambre y sube comiendo o bebiendo.
+  double energyCap = maxPoints;
   bool darkWound = false;
   bool hasPistol = false;
   bool hasPipe = false;
@@ -190,6 +192,7 @@ class Game {
         'kills': kills,
         'hp': p.hp,
         'energy': p.energy,
+        'cap': p.energyCap,
         'dark': p.darkWound,
         'pistol': p.hasPistol,
         'pipe': p.hasPipe,
@@ -223,7 +226,8 @@ class Game {
     kills = s['kills'] as int;
     // Volver con media vida como mínimo: si no, un mal guardado sería una trampa.
     p.hp = max((s['hp'] as num).toDouble(), maxPoints / 2);
-    p.energy = maxPoints;
+    p.energyCap = max((s['cap'] as num? ?? maxPoints).toDouble(), maxPoints / 2);
+    p.energy = p.energyCap;
     p.darkWound = s['dark'] as bool;
     p.hasPistol = s['pistol'] as bool;
     p.hasPipe = s['pipe'] as bool;
@@ -406,7 +410,12 @@ class Game {
     }
 
     final before = p.energy;
-    p.energy = max(0, p.energy - dt * (1 / 35 + (p.running ? 1 / 12 : 0)));
+    p.energyCap = max(0, p.energyCap - dt / 35);
+    if (!p.moving || hiding != null) {
+      // Parado o escondido recuperas el aliento, pero no el hambre.
+      p.energy = min(p.energyCap, p.energy + dt * 0.25);
+    }
+    p.energy = max(0, min(p.energyCap, p.energy - dt * (p.running ? 1 / 12 : 0)));
     if (before > 3 && p.energy <= 3) {
       say('Te flaquean las piernas. Bebe o come algo pronto.', const Color(0xFFE8C030));
     }
@@ -503,7 +512,8 @@ class Game {
     switch (t) {
       case ItemType.water:
       case ItemType.food:
-        p.energy = min(maxPoints, p.energy + 2);
+        p.energyCap = min(maxPoints, p.energyCap + 2);
+        p.energy = min(p.energyCap, p.energy + 2);
         say(t == ItemType.water ? 'Bebes. +2 energía.' : 'Comes algo. +2 energía.', const Color(0xFFE8D468));
         audio.play(Sfx.pickup, volume: 0.5);
       case ItemType.medkit:
@@ -692,14 +702,12 @@ class Game {
       e.state = EState.dead;
       e.deadT = 0;
       kills++;
-      say(['El sicario cae.', 'Uno menos.', 'No se levanta.'][rng.nextInt(3)], const Color(0xFFDDAAAA));
       if (rng.nextDouble() < 0.4) floor.items.add(GroundItem(e.pos + const Offset(0.2, 0.1), ItemType.ammo));
       for (final o in floor.enemies) {
         if (o.alive && (o.pos - e.pos).distance < 9 && lineOfSight(floor, o.pos, e.pos)) _makeFlee(o, 5);
       }
     } else {
       _makeFlee(e, 4.5);
-      say('¡Huye como una rata!', const Color(0xFFDDAAAA));
     }
   }
 
@@ -789,12 +797,9 @@ class Game {
     p.pos = h.pos;
     p.vel = Offset.zero;
     audio.play(Sfx.cock, volume: 0.4);
-    hidingSeen = floor.enemies.any((e) => e.alive && e.unseenT < 0.3);
-    if (hidingSeen) {
-      say('¡Te han visto entrar en ${h.name}!', const Color(0xFFFF6060));
-    } else {
-      say('Te escondes en ${h.name}. Contén la respiración...', const Color(0xFFAAAAAA));
-    }
+    // Solo te pillan si te están viendo justo al entrar.
+    hidingSeen = floor.enemies.any((e) => e.alive && e.seesPlayer);
+    if (hidingSeen) audio.play(Sfx.alert);
   }
 
   void _dragOut() {
@@ -829,9 +834,6 @@ class Game {
     audio.play(Sfx.cock, volume: 0.5);
     if (r.lit) {
       audio.play(Sfx.buzz, volume: 0.8);
-      say('Los fluorescentes parpadean y se encienden. El zumbido resuena por toda la planta...',
-          const Color(0xFFFFE6B0));
-      say('Si lo oyes tú, lo oyen ellos.', const Color(0xFFFF9090));
       _alertTo(r.rect.center);
       switchAlertT = 12;
     } else {
@@ -1199,16 +1201,34 @@ class Game {
       final toP = p.pos - e.pos;
       final dist = toP.distance;
       final los = dist < 14 && lineOfSight(f, e.pos, p.pos);
+      // Ver exige mirarte (o tenerte encima); correr solo hace ruido.
       final canSee = hiding != null
           ? hidingSeen && dist < 2.5
-          : los && (angleDiff(e.angle, toP.direction) < 1.2 || dist < 3.5 || muzzleFlash > 0 || p.running && dist < 6);
+          : los && (angleDiff(e.angle, toP.direction) < 1.0 || dist < 1.5 || muzzleFlash > 0);
+      e.seesPlayer = canSee && hiding == null;
+      final heard = !canSee && hiding == null && p.running && dist < 7;
       if (hiding != null && hidingSeen && (e.pos - hiding!.pos).distance < 1.5) _dragOut();
+      final near = (1 - dist / 16).clamp(0.15, 1.0);
       if (canSee) {
+        if (e.unseenT > 1.5 && hiding == null) audio.play(Sfx.alert, volume: near);
         e.lastKnown = p.pos;
         e.unseenT = 0;
+        e.searchT = 0;
       } else {
         e.unseenT += dt;
+        if (heard) {
+          // Va hacia el ruido, pero no sabe exactamente dónde estás.
+          e.lastKnown = p.pos + Offset(rng.nextDouble() - 0.5, rng.nextDouble() - 0.5) * 2;
+          e.unseenT = min(e.unseenT, 1.5);
+          e.searchT = 0;
+          if (e.state == EState.patrol) {
+            e.state = EState.chase;
+            e.repath = 0;
+            audio.play(Sfx.suspect, volume: near * 0.8);
+          }
+        }
       }
+      if (e.state != EState.chase) e.stamina = min(sicarioStamina, e.stamina + dt * 0.6);
 
       // Primer avistamiento: el gran susto.
       if (!firstSicarioSeen && dist < 12 && enemyVisible(e)) {
@@ -1240,7 +1260,6 @@ class Game {
               shake = max(shake, 10);
               redFlash = max(redFlash, 0.5);
               HapticFeedback.heavyImpact();
-              big('¡TE HAN VISTO!', const Color(0xFFFF2020), 1.2);
               scareCd = 22;
             }
           }
@@ -1258,12 +1277,31 @@ class Game {
           if (canSee && dist < 2.6) {
             e.angle = lerpAngle(e.angle, toP.direction, dt * 10);
             e.moving = false;
+          } else if (!canSee && e.path.isEmpty && (e.lastKnown - e.pos).distance < 0.7) {
+            // Llegó a donde te perdió: mira a un lado y a otro y se va.
+            e.moving = false;
+            e.searchT += dt;
+            e.angle += sin(e.searchT * 2.2) * dt * 2.5;
+            if (e.searchT > 3) {
+              e.state = EState.patrol;
+              e.path = [];
+              e.searchT = 0;
+            }
           } else {
-            _follow(e, 3.3, dt, finalTarget: e.lastKnown);
+            // Esprinta mientras le dura el aliento; luego, más lento que tú andando.
+            final fresh = e.stamina > 0 || e.fearless;
+            e.pantCd -= dt;
+            if (!fresh && e.pantCd <= 0 && dist < 12) {
+              e.pantCd = 1.1;
+              audio.play(Sfx.pant, volume: near * 0.9);
+            }
+            e.stamina -= dt;
+            _follow(e, fresh ? 3.6 : 2.1, dt, finalTarget: e.lastKnown);
           }
           if (e.unseenT > 6) {
             e.state = EState.patrol;
             e.path = [];
+            e.searchT = 0;
           }
         case EState.aim:
           e.moving = false;
@@ -1324,8 +1362,8 @@ class Game {
         final t = _farTile(18);
         if (t != null) {
           f.enemies.add(Enemy(tileCenter(t), rng.nextDouble() * 2 * pi, rng.nextDouble() * 10));
-          say(['Un portazo a lo lejos... llegan más.', 'Voces. Están entrando más.', 'Oyes un coche frenar fuera.'][
-              rng.nextInt(3)], const Color(0xFFFF9090));
+          // Un portazo lejano: ha entrado otro.
+          audio.play(Sfx.punch, volume: 0.3);
         }
       }
     }

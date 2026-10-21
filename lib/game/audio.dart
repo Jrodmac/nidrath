@@ -28,6 +28,9 @@ enum Sfx {
   thunder,
   typeKey,
   carCrash,
+  alert, // «¡EH!»: te ha visto
+  suspect, // «¿hm?»: te ha oído
+  pant, // jadeo de un sicario agotado
 }
 
 const int _sr = 22050;
@@ -76,6 +79,9 @@ class GameAudio {
       _bank[Sfx.thunder] = _wav(_thunder(rng));
       _bank[Sfx.typeKey] = _wav(_typeKey(rng));
       _bank[Sfx.carCrash] = _wav(_carCrash(rng));
+      _bank[Sfx.alert] = _wav(_voice(rng, 0.42, 190, 135, const [(720.0, 1.0, 260.0), (1180.0, 0.7, 320.0), (2500.0, 0.35, 450.0)], 2.2));
+      _bank[Sfx.suspect] = _wav(_voice(rng, 0.5, 105, 150, const [(320.0, 1.0, 160.0), (900.0, 0.15, 300.0)], 1.0));
+      _bank[Sfx.pant] = _wav(_pant(rng));
       _drone = _wav(_droneLoop(rng));
       _rain = _wav(_rainLoop(rng));
       for (var i = 0; i < 8; i++) {
@@ -549,6 +555,48 @@ Float64List _rainLoop(Random r) {
     s[i] = s[i] * k + total[n + i] * (1 - k);
   }
   _normalize(s, 0.5);
+  return s;
+}
+
+/// Voz humana sintetizada: armónicos de una fundamental que se desliza,
+/// pesados por formantes (frecuencia, ganancia, anchura).
+Float64List _voice(Random r, double secs, double f0a, double f0b, List<(double, double, double)> formants, double drive) {
+  final s = _buf(secs);
+  var phase = 0.0;
+  for (var i = 0; i < s.length; i++) {
+    final t = i / _sr;
+    final k = t / secs;
+    final f0 = f0a + (f0b - f0a) * k + sin(2 * pi * 6 * t) * 3;
+    phase += 2 * pi * f0 / _sr;
+    var v = 0.0;
+    for (var h = 1; h * f0 < 4000; h++) {
+      var a = 0.0;
+      for (final (fc, g, bw) in formants) {
+        final d = (h * f0 - fc) / bw;
+        a += g * exp(-d * d);
+      }
+      v += sin(phase * h) * a;
+    }
+    final env = min(1.0, t / 0.03) * (k < 0.6 ? 1.0 : exp(-(k - 0.6) * 9));
+    s[i] = _tanh((v + _noise(r) * 0.08) * env * drive);
+  }
+  _normalize(s, 0.85);
+  return s;
+}
+
+/// Tres jadeos rápidos de alguien sin aliento.
+Float64List _pant(Random r) {
+  final s = _buf(1.0);
+  var lp = 0.0, lp2 = 0.0;
+  for (var i = 0; i < s.length; i++) {
+    final t = i / _sr;
+    lp += (_noise(r) - lp) * 0.35;
+    lp2 += (lp - lp2) * 0.06;
+    final c = t % 0.32;
+    final env = c < 0.2 ? sin(pi * c / 0.2) : 0.0;
+    s[i] = (lp - lp2) * env * (t < 0.64 ? 1.0 : 0.7);
+  }
+  _normalize(s, 0.7);
   return s;
 }
 

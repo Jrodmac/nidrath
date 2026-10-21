@@ -102,6 +102,44 @@ void main() {
     expect(e.alive, isFalse);
   });
 
+  test('el sicario se cansa y descansar recupera energía', () {
+    final g = Game();
+    final input = GameInput();
+    for (final fl in g.world.floors) {
+      fl.enemies.clear();
+      fl.spawnTimer = 1e9;
+    }
+    g.firstEncounterT = 1e9;
+    final f = g.floor;
+    final e = Enemy(g.p.pos, 0, 0)..state = EState.chase;
+    f.enemies.add(e);
+    // Persigue un punto lejano: gasta el aliento esprintando.
+    final far = tileCenter(f.freeTiles.reduce((a, b) =>
+        (tileCenter(a) - g.p.pos).distance > (tileCenter(b) - g.p.pos).distance ? a : b));
+    g.p.pos = far;
+    for (var i = 0; i < 60 * 6; i++) {
+      e.lastKnown = far;
+      e.unseenT = 0;
+      e.state = EState.chase;
+      g.update(1 / 60, input);
+    }
+    expect(e.stamina, lessThanOrEqualTo(0), reason: 'a los 4 s se agota');
+
+    // Descansar recupera, pero solo hasta el tope del hambre.
+    f.enemies.clear();
+    g.p.energy = 2;
+    g.p.energyCap = 6;
+    for (var i = 0; i < 60 * 30; i++) {
+      g.update(1 / 60, input);
+    }
+    expect(g.p.energy, closeTo(g.p.energyCap, 0.01));
+    expect(g.p.energyCap, lessThan(6));
+    g.p.inv[ItemType.water] = 1;
+    final cap = g.p.energyCap;
+    g.useItem(ItemType.water);
+    expect(g.p.energyCap, closeTo(cap + 2, 0.01));
+  });
+
   test('el punto de control guarda y recupera la partida', () {
     final g = Game();
     expect(g.pendingSave, isNotNull, reason: 'guarda al empezar');

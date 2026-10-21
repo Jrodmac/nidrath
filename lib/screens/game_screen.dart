@@ -416,7 +416,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
             children: [
               _pips('SALUD', p.hp, const Color(0xFFD03030), p.darkWound ? const Color(0xFF8E44AD) : null),
               const SizedBox(height: 4),
-              _pips('ENERGÍA', p.energy, const Color(0xFFE8C030), null),
+              _pips('ENERGÍA', p.energy, const Color(0xFFE8C030), null, cap: p.energyCap),
               const SizedBox(height: 4),
               Wrap(spacing: 6, children: [
                 if (p.darkWound) _tag('HERIDA OSCURA', const Color(0xFF8E44AD)),
@@ -460,7 +460,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     );
   }
 
-  Widget _pips(String label, double value, Color color, Color? border) {
+  /// Con [cap], los cuadros entre el valor y el tope salen apagados: se recuperan descansando.
+  Widget _pips(String label, double value, Color color, Color? border, {double? cap}) {
     return Row(mainAxisSize: MainAxisSize.min, children: [
       SizedBox(width: 62, child: Text(label, style: _hudText(11, const Color(0xFFAAAAAA)))),
       for (var i = 0; i < maxPoints; i++)
@@ -469,7 +470,10 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
           height: 13,
           margin: const EdgeInsets.only(right: 2),
           decoration: BoxDecoration(
-            color: Color.lerp(const Color(0xFF1A1A1A), color, (value - i).clamp(0.0, 1.0)),
+            color: Color.lerp(
+                Color.lerp(const Color(0xFF1A1A1A), color.withValues(alpha: 1), cap == null ? 0 : (cap - i).clamp(0.0, 1.0) * 0.3),
+                color,
+                (value - i).clamp(0.0, 1.0)),
             border: Border.all(color: border ?? Colors.black, width: 2),
           ),
         ),
@@ -566,6 +570,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                   'Botón de acción: registrar, esconderse, usar, escaleras\n'
                   'Toca los objetos de abajo para usarlos\n'
                   'Ascensor: botón de acción y elige planta\n\n'
+                  'Parado o escondido recuperas el aliento; comer y beber, el resto\n'
                   'Sin armas no puedes atacar: corre y escóndete\n'
                   'en taquillas y probadores.\n'
                   'Si te quedas quieto mientras te apuntan, irán a la cabeza.',

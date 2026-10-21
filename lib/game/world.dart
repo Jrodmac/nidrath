@@ -101,6 +101,9 @@ class Lamp {
 
 enum EState { patrol, chase, aim, flee, dead }
 
+/// Un sicario esprinta unos segundos y luego va más lento que tú andando.
+const double sicarioStamina = 4;
+
 class Enemy {
   Offset pos;
   double angle;
@@ -122,6 +125,10 @@ class Enemy {
   List<Offset> light = const [];
   final double cigPhase;
   bool fearless = false; // los de la azotea no huyen
+  double stamina = sicarioStamina; // segundos de carrera antes de cansarse
+  double searchT = 0; // >0: registrando la zona donde te perdió
+  bool seesPlayer = false;
+  double pantCd = 0;
   Enemy(this.pos, this.angle, this.cigPhase);
   bool get alive => state != EState.dead;
 }
