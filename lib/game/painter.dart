@@ -37,6 +37,11 @@ class GamePainter extends CustomPainter {
         ? Offset((_fx.nextDouble() * 2 - 1) * g.shake, (_fx.nextDouble() * 2 - 1) * g.shake)
         : Offset.zero;
 
+    _paintWorld(canvas, size, ts, alive, darkA);
+    _drawScreenFx(canvas, size, alive);
+  }
+
+  void _paintWorld(Canvas canvas, Size size, TileSet ts, bool alive, double darkA) {
     canvas.drawRect(Offset.zero & size, Paint()..color = alive ? const Color(0xFF7FB8C9) : Colors.black);
 
     canvas.save();
@@ -60,7 +65,73 @@ class GamePainter extends CustomPainter {
     canvas.restore();
 
     _drawSigns(canvas, view, alive);
-    _drawScreenFx(canvas, size, alive);
+    if (g.fi == roofFloor) _drawRain(canvas, size);
+  }
+
+  /// Motas de polvo flotando, visibles solo dentro del haz de la linterna.
+  void _drawDust(Canvas canvas) {
+    final cone = g.conePoly;
+    if (cone.isEmpty || g.hiding != null || g.flashPower < 0.1) return;
+    final p = g.p;
+    final reach = g.coneLen;
+    canvas.save();
+    canvas.clipPath(Path()..addPolygon(cone, true));
+    final paint = Paint()..blendMode = BlendMode.plus;
+    final t = g.time;
+    final x0 = (p.pos.dx - reach).floor(), x1 = (p.pos.dx + reach).ceil();
+    final y0 = (p.pos.dy - reach).floor(), y1 = (p.pos.dy + reach).ceil();
+    for (var y = y0; y <= y1; y++) {
+      for (var x = x0; x <= x1; x++) {
+        for (var k = 0; k < 2; k++) {
+          // Pseudoaleatorio estable por casilla: cada mota deriva despacio en su sitio.
+          final h = ((x * 73856093) ^ (y * 19349663) ^ (k * 83492791)) & 0xFFFFFF;
+          final a = (h & 0xFF) / 255, b = ((h >> 8) & 0xFF) / 255, c = ((h >> 16) & 0xFF) / 255;
+          final pos = Offset(
+            x + (a + sin(t * (0.2 + c * 0.3) + c * 6) * 0.25) % 1,
+            y + (b + t * (0.03 + a * 0.05)) % 1,
+          );
+          final d = (pos - p.pos).distance;
+          if (d > reach) continue;
+          final twinkle = 0.5 + 0.5 * sin(t * (1 + b * 2) + a * 9);
+          final alpha = (1 - d / reach) * 0.55 * twinkle * g.flashPower;
+          if (alpha < 0.03) continue;
+          paint.color = Color.fromRGBO(255, 245, 220, alpha);
+          final sz = 0.035 + c * 0.03;
+          canvas.drawRect(Rect.fromCenter(center: pos, width: sz, height: sz), paint);
+        }
+      }
+    }
+    canvas.restore();
+  }
+
+  /// Lluvia en diagonal sobre la azotea, con salpicaduras en el suelo.
+  void _drawRain(Canvas canvas, Size size) {
+    final t = g.time;
+    final streak = Paint()
+      ..color = const Color(0x55A8C0E0)
+      ..strokeWidth = 1.5;
+    const n = 140;
+    for (var i = 0; i < n; i++) {
+      final h1 = ((i * 2654435761) & 0xFFFF) / 0xFFFF;
+      final h2 = ((i * 40503 + 12345) & 0xFFFF) / 0xFFFF;
+      final speed = 900 + h1 * 500;
+      final y = (h2 * size.height + t * speed) % (size.height + 40) - 20;
+      final x = (h1 * size.width * 1.2 - y * 0.25 + t * 40) % size.width;
+      final len = 14 + h2 * 16;
+      canvas.drawLine(Offset(x, y), Offset(x - len * 0.25, y - len), streak);
+    }
+    // Salpicaduras: anillos que se abren y desaparecen.
+    final ring = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    for (var i = 0; i < 40; i++) {
+      final phase = (t * 2.5 + i * 0.137) % 1;
+      final slot = ((t * 2.5 + i * 0.137).floor() * 7919 + i * 104729) & 0xFFFF;
+      final x = (slot % 997) / 997 * size.width;
+      final y = ((slot * 31) % 991) / 991 * size.height;
+      ring.color = Color.fromRGBO(170, 195, 230, 0.35 * (1 - phase));
+      canvas.drawOval(Rect.fromCenter(center: Offset(x, y), width: 4 + phase * 16, height: 2 + phase * 7), ring);
+    }
   }
 
   // --- Mundo -----------------------------------------------------------------
@@ -170,6 +241,52 @@ class GamePainter extends CustomPainter {
     return s > 0 ? down : up;
   }
 
+  /// Cae de lado desde los pies en 0,35 s.
+  void _drawFall(Canvas canvas, Sprite s, Offset feet, double width, double t, bool right, double opacity) {
+    final k = Curves.easeIn.transform((t / 0.35).clamp(0.0, 1.0));
+    final bounce = t > 0.35 && t < 0.5 ? sin((t - 0.35) / 0.15 * pi) * 0.04 : 0.0;
+    canvas.save();
+    canvas.translate(feet.dx, feet.dy - bounce);
+    canvas.rotate((right ? -1 : 1) * k * pi / 2);
+    s.draw(canvas, Offset.zero, width, anchorY: 1, flipX: !right, opacity: opacity);
+    canvas.restore();
+  }
+
+  /// Pistola en la mano, apuntando; con retroceso justo después del disparo.
+  /// [aim]: la de un sicario a punto de disparar, con el destello rojo de aviso.
+  void _drawGun(Canvas canvas, Offset feet, double angle, double recoil, {bool aim = false}) {
+    final dir = Offset(cos(angle), sin(angle));
+    final hand = feet + const Offset(0, -0.4) + dir * (0.28 - recoil * 0.08);
+    canvas.save();
+    canvas.translate(hand.dx, hand.dy);
+    canvas.rotate(angle - recoil * 0.35);
+    canvas.drawRect(const Rect.fromLTWH(0, -0.04, 0.26, 0.08), Paint()..color = const Color(0xFF1A1A1E));
+    canvas.drawRect(const Rect.fromLTWH(0.02, -0.04, 0.06, 0.14), Paint()..color = const Color(0xFF2A2A30));
+    canvas.restore();
+    if (aim && (g.time * 8).floor() % 2 == 0) {
+      canvas.drawCircle(hand + dir * 0.3, 0.05, Paint()..color = const Color(0xFFFF3030));
+    }
+  }
+
+  /// Barra de hierro al hombro; al golpear, barre un arco delante.
+  void _drawPipe(Canvas canvas, Offset feet, double angle, double swing) {
+    final hand = feet + const Offset(0, -0.4) + Offset(cos(angle), sin(angle)) * 0.2;
+    final a = swing > 0 ? angle + (swing - 0.5) * 2.2 : angle - 1.1;
+    final tip = hand + Offset(cos(a), sin(a)) * 0.55;
+    canvas.drawLine(hand, tip, Paint()
+      ..color = const Color(0xFF6A6E74)
+      ..strokeWidth = 0.08
+      ..strokeCap = StrokeCap.square);
+    if (swing > 0) {
+      // Estela del golpe.
+      final trail = Paint()
+        ..color = Color.fromRGBO(220, 220, 230, 0.35 * swing)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.05;
+      canvas.drawArc(Rect.fromCircle(center: hand, radius: 0.5), angle - 1.1, 2.2 * (1 - swing), false, trail);
+    }
+  }
+
   void _drawObjects(Canvas canvas, Rect view, bool alive) {
     final sp = Sprites.i;
     final f = g.floor;
@@ -267,6 +384,7 @@ class GamePainter extends CustomPainter {
       items.add((
         e.alive ? e.pos.dy + 0.3 : e.pos.dy - 0.5,
         () {
+          final anim = sp.thugAnims[e.look];
           if (!e.alive) {
             if (!alive) {
               canvas.drawOval(
@@ -274,14 +392,19 @@ class GamePainter extends CustomPainter {
                       center: e.pos + const Offset(0.05, 0.1), width: 0.5 + min(1.0, e.deadT) * 0.4, height: 0.4),
                   Paint()..color = const Color(0xAA4A0606));
             }
-            sp.thugSide.draw(canvas, e.pos, 0.75, rotation: pi / 2, opacity: e.fade);
+            _drawFall(canvas, anim.side[1], e.pos + const Offset(0, 0.3), 0.9, e.deadT, cos(e.angle) >= 0, e.fade);
             return;
           }
           final feet = e.pos + const Offset(0, 0.3);
           shadow(feet, 0.5);
-          final bob = e.moving ? -sin(g.time * 18).abs() * 0.05 : 0.0;
-          final s = _dirSprite(e.angle, sp.thugDown, sp.thugUp, sp.thugSide, flip);
+          final fast = e.state == EState.chase || e.state == EState.flee;
+          final frame = e.moving ? (g.time * (fast ? 11 : 6) + e.cigPhase).floor() : 0;
+          final bob = e.moving ? -sin(g.time * (fast ? 17 : 9) + e.cigPhase).abs() * 0.04 : 0.0;
+          final s = anim.pick(e.angle, frame, flip);
+          final aiming = e.state == EState.aim;
+          if (aiming && sin(e.angle) < 0) _drawGun(canvas, feet, e.angle, 0, aim: true);
           s.draw(canvas, feet + Offset(0, bob), 0.9, anchorY: 1, flipX: flip[0], opacity: e.fade);
+          if (aiming && sin(e.angle) >= 0) _drawGun(canvas, feet, e.angle, 0, aim: true);
         }
       ));
     }
@@ -295,16 +418,28 @@ class GamePainter extends CustomPainter {
                 Rect.fromCenter(
                     center: boss.pos + const Offset(0.05, 0.1), width: 0.7 + min(1.0, boss.deadT) * 0.6, height: 0.55),
                 Paint()..color = const Color(0xAA4A0606));
-            sp.bossSide.draw(canvas, boss.pos, 1.05, rotation: pi / 2);
+            _drawFall(canvas, sp.bossAnim.side[1], boss.pos + const Offset(0, 0.35), 1.2, boss.deadT,
+                cos(boss.angle) >= 0, 1);
             return;
           }
           final feet = boss.pos + const Offset(0, 0.35);
           shadow(feet, 0.75);
-          final bob = boss.moving ? -sin(g.time * 14).abs() * 0.06 : 0.0;
-          final lunge = boss.windup > 0 ? Offset(cos(boss.angle), sin(boss.angle)) * 0.08 : Offset.zero;
-          final s = _dirSprite(boss.angle, sp.bossDown, sp.bossUp, sp.bossSide, flip);
+          final dir = Offset(cos(boss.angle), sin(boss.angle));
+          final hurt = boss.hp < bossHp * 0.4;
+          final frame = boss.moving ? (g.time * (hurt ? 6 : 8)).floor() : 0;
+          var bob = boss.moving ? -sin(g.time * (hurt ? 9 : 12)).abs() * 0.06 : 0.0;
+          // Cojea cuando está herido: un lado pesa más.
+          final limp = boss.moving && hurt ? Offset(sin(g.time * 4.5) * 0.05, 0) : Offset.zero;
+          // Echa el cuerpo atrás al preparar la puñalada y se lanza al soltarla.
+          final windK = boss.windup > 0 ? 1 - boss.windup / 0.45 : 0.0;
+          final strike = boss.cooldown > 0.82 ? (boss.cooldown - 0.82) / 0.18 : 0.0;
+          final lunge = dir * (-0.12 * windK + 0.22 * strike);
+          // Respira hondo cuando está quieto.
+          final breath = boss.moving ? 0.0 : sin(g.time * 2.6) * 0.02;
+          if (!boss.moving) bob -= breath * 0.5;
+          final s = sp.bossAnim.pick(boss.angle, frame, flip);
           final op = boss.stagger > 0 && (g.time * 30).floor() % 2 == 0 ? 0.5 : 1.0;
-          s.draw(canvas, feet + Offset(0, bob) + lunge, 1.2, anchorY: 1, flipX: flip[0], opacity: op);
+          s.draw(canvas, feet + Offset(0, bob) + lunge + limp, 1.2 * (1 + breath), anchorY: 1, flipX: flip[0], opacity: op);
         }
       ));
     }
@@ -328,9 +463,20 @@ class GamePainter extends CustomPainter {
         final feet = p.pos + const Offset(0, 0.3);
         shadow(feet, 0.5);
         final bob = p.moving ? -sin(p.walkPhase * 3).abs() * 0.05 : 0.0;
-        final s = _dirSprite(p.angle, sp.playerDown, sp.playerUp, sp.playerSide, flip);
+        final frame = p.moving ? (p.walkPhase * 3 / pi).floor() : 0;
+        final s = sp.playerAnim.pick(p.angle, frame, flip);
         final op = p.hurtT > 0 && (g.time * 20).floor() % 2 == 0 ? 0.4 : 1.0;
+        final gun = p.hasPistol && p.ammo > 0;
+        final pipe = !gun && p.hasPipe;
+        final behind = sin(p.angle) < 0; // de espaldas, el arma queda detrás del cuerpo
+        void weapon() {
+          if (gun) _drawGun(canvas, feet + Offset(0, bob), p.angle, p.shotT / 0.18);
+          if (pipe) _drawPipe(canvas, feet + Offset(0, bob), p.angle, p.swingT / 0.25);
+        }
+
+        if (behind) weapon();
         s.draw(canvas, feet + Offset(0, bob), 0.9, anchorY: 1, flipX: flip[0], opacity: op);
+        if (!behind) weapon();
       }
       ));
     }
@@ -537,10 +683,14 @@ class GamePainter extends CustomPainter {
     }
     if (g.muzzleFlash > 0) {
       final m = p.pos + Offset(cos(p.angle), sin(p.angle)) * 0.4 + const Offset(0, -0.15);
+      final k = (g.muzzleFlash / 0.12).clamp(0.0, 1.0);
+      plus.shader = ui.Gradient.radial(m, 2.2, [Color.fromRGBO(255, 200, 120, 0.35 * k), const Color(0x00FFC878)], [0, 1]);
+      canvas.drawCircle(m, 2.2, plus);
       plus.shader = ui.Gradient.radial(m, 0.6, [const Color(0xFFFFF0A0), const Color(0x00FFF0A0)], [0, 1]);
       canvas.drawCircle(m, 0.6, plus);
       plus.shader = null;
     }
+    _drawDust(canvas);
     final sp = Paint();
     for (final s in g.sparks) {
       sp.color = s.color.withValues(alpha: (s.life * 2).clamp(0.0, 1.0));
@@ -579,6 +729,15 @@ class GamePainter extends CustomPainter {
         textDirection: TextDirection.ltr,
       )..layout();
       final c = toScreen(l.pos + Offset(0, l.mode == 3 ? -0.3 : 0));
+      if (on) {
+        canvas.drawOval(
+          Rect.fromCenter(center: c, width: tp.width * 1.5 + _s * 0.6, height: tp.height * 2.2 + _s * 0.4),
+          Paint()
+            ..blendMode = BlendMode.plus
+            ..color = l.color.withValues(alpha: 0.22 * level)
+            ..maskFilter = MaskFilter.blur(BlurStyle.normal, _s * 0.35),
+        );
+      }
       tp.paint(canvas, c - Offset(tp.width / 2, tp.height / 2));
     }
   }
@@ -590,16 +749,18 @@ class GamePainter extends CustomPainter {
     final p = g.p;
 
     // Viñeta.
-    canvas.drawRect(
-      full,
-      Paint()
-        ..shader = ui.Gradient.radial(
-          size.center(Offset.zero),
-          size.longestSide * 0.62,
-          [const Color(0x00000000), Color.fromRGBO(0, 0, 0, alive ? 0.25 : 0.85)],
-          [0.45, 1],
-        ),
-    );
+    {
+      canvas.drawRect(
+        full,
+        Paint()
+          ..shader = ui.Gradient.radial(
+            size.center(Offset.zero),
+            size.longestSide * 0.62,
+            [const Color(0x00000000), Color.fromRGBO(0, 0, 0, alive ? 0.25 : 0.85)],
+            [0.45, 1],
+          ),
+      );
+    }
 
     // Viñeta roja con poca salud o energía.
     final danger = min(p.hp, p.energy * 1.5);

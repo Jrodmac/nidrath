@@ -131,6 +131,8 @@ class Enemy {
   double pantCd = 0;
   Enemy(this.pos, this.angle, this.cigPhase);
   bool get alive => state != EState.dead;
+  /// Qué aspecto tiene (0..3), fijo para cada sicario.
+  int get look => (cigPhase * 997).floor() % 4;
 }
 
 /// El guardián de la caja: un tipo enorme con un cuchillo.

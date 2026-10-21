@@ -37,6 +37,83 @@ class Sprite {
 
 Sprite buildSprite(List<String> rows, Map<String, Color> pal) => _build(rows, pal);
 
+/// Ciclo de andar de un personaje: 4 imágenes por dirección.
+class CharAnim {
+  final List<Sprite> down, up, side;
+  CharAnim(this.down, this.up, this.side);
+
+  /// Imagen para mirar en [angle]; [flip] recibe si hay que voltear en horizontal.
+  Sprite pick(double angle, int frame, List<bool> flip) {
+    final c = cos(angle), s = sin(angle);
+    final f = frame % 4;
+    if (c.abs() > s.abs()) {
+      flip[0] = c < 0;
+      return side[f];
+    }
+    flip[0] = false;
+    return s > 0 ? down[f] : up[f];
+  }
+
+  /// De frente o de espaldas: alterna levantar una pierna y la otra.
+  /// De perfil: paso abierto y piernas juntas.
+  static CharAnim build(List<String> down, List<String> up, List<String> side, Map<String, Color> pal,
+      {required int legFrom, required int sideFrom}) {
+    List<Sprite> frontal(List<String> rows) => [
+          _build(rows, pal),
+          _build(_liftLeg(rows, legFrom, true), pal),
+          _build(rows, pal),
+          _build(_liftLeg(rows, legFrom, false), pal),
+        ];
+    final stride = _build(_stride(side, sideFrom), pal);
+    final pass = _build(side, pal);
+    return CharAnim(frontal(down), frontal(up), [stride, pass, stride, pass]);
+  }
+}
+
+int _width(List<String> rows) => rows.fold<int>(0, (m, r) => max(m, r.length));
+
+/// Sube un píxel la pierna de un lado desde la fila [from]: el pie se despega del suelo.
+List<String> _liftLeg(List<String> rows, int from, bool left) {
+  final w = _width(rows);
+  final src = [for (final r in rows) r.padRight(w, '.')];
+  final mid = w ~/ 2;
+  return [
+    for (var y = 0; y < src.length; y++)
+      y < from
+          ? src[y]
+          : String.fromCharCodes([
+              for (var x = 0; x < w; x++)
+                ((x < mid) == left)
+                    ? (y + 1 < src.length ? src[y + 1].codeUnitAt(x) : 46)
+                    : src[y].codeUnitAt(x),
+            ]),
+  ];
+}
+
+/// Separa las piernas hacia delante y hacia atrás desde la fila [from].
+List<String> _stride(List<String> rows, int from) {
+  final w = _width(rows);
+  final src = [for (final r in rows) r.padRight(w, '.')];
+  final mid = w ~/ 2;
+  return [
+    for (var y = 0; y < src.length; y++)
+      y <= from
+          ? src[y]
+          : String.fromCharCodes([
+              for (var x = 0; x < w; x++)
+                () {
+                  final a = y >= src.length - 2 ? 2 : 1;
+                  final sx = x < mid ? x + a : x - a;
+                  if ((x < mid) != (sx < mid) || sx < 0 || sx >= w) return 46;
+                  return src[y].codeUnitAt(sx);
+                }(),
+            ]),
+  ];
+}
+
+/// Variantes de sicario: gorra roja y chándal, calvo, chaqueta de cuero o traje negro.
+const thugLooks = 4;
+
 const playerPalette = _playerPal;
 
 Sprite _build(List<String> rows, Map<String, Color> pal) {
@@ -700,6 +777,8 @@ class Sprites {
   late Sprite thugDown, thugUp, thugSide;
   late Sprite manDown, manUp, manSide;
   late Sprite bossDown, bossUp, bossSide;
+  late CharAnim playerAnim, bossAnim;
+  late List<CharAnim> thugAnims;
   late List<Sprite> cars;
   late List<Sprite> crates;
   late Sprite pc, box;
@@ -719,6 +798,17 @@ class Sprites {
     bossDown = _build(_bossDown, _bossPal);
     bossUp = _build(_bossUp, _bossPal);
     bossSide = _build(_bossSide, _bossPal);
+    playerAnim = CharAnim.build(_humanDown, _humanUp, _humanSide, _playerPal, legFrom: 13, sideFrom: 12);
+    bossAnim = CharAnim.build(_bossDown, _bossUp, _bossSide, _bossPal, legFrom: 15, sideFrom: 13);
+    thugAnims = [
+      for (final pal in [
+        _thugPal,
+        {..._thugPal, 'h': const Color(0xFFA06A44)},
+        {..._thugPal, 'h': const Color(0xFF2A1A10), 'c': const Color(0xFF4A2E1C), 'C': const Color(0xFF6A4630), 'w': const Color(0xFF8A8070)},
+        {..._thugPal, 'h': const Color(0xFF7A1414), 'c': const Color(0xFF1E2A44), 'C': const Color(0xFF3A4A6A), 'w': const Color(0xFFDDDDDD)},
+      ])
+        CharAnim.build(_thugDown, _thugUp, _thugSide, pal, legFrom: 13, sideFrom: 12),
+    ];
     cars = [
       for (final body in carBodies)
         _build(_car, {

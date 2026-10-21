@@ -34,6 +34,7 @@ class Player {
   int ammo = 0;
   final Map<ItemType, int> inv = {};
   double attackCd = 0;
+  double shotT = 0, swingT = 0; // animación del disparo y del golpe de barra
   double magicCd = 0;
   double hurtT = 0;
   double stillT = 0;
@@ -426,6 +427,8 @@ class Game {
     if (p.darkWound) _damage(dt / 20, quiet: true);
 
     p.attackCd = max(0, p.attackCd - dt);
+    p.shotT = max(0, p.shotT - dt);
+    p.swingT = max(0, p.swingT - dt);
     p.magicCd = max(0, p.magicCd - dt);
     p.hurtT = max(0, p.hurtT - dt);
 
@@ -625,6 +628,7 @@ class Game {
     if (p.hasPistol && p.ammo > 0) {
       p.ammo--;
       p.attackCd = 0.35;
+      p.shotT = 0.18;
       muzzleFlash = 0.12;
       flashPoly = lightPolygon(floor, p.pos, 7, 90);
       shake = max(shake, 4);
@@ -649,6 +653,7 @@ class Game {
     if (p.hasPistol && p.ammo == 0) audio.play(Sfx.cock, volume: 0.6);
     // Barra de hierro: te lanzas a por el que tengas delante y le golpeas.
     p.attackCd = 0.5;
+    p.swingT = 0.25;
     audio.play(Sfx.swing, volume: 0.7);
     const reach = 3.0, range = 1.5;
     final boss = floor.boss;
@@ -1053,6 +1058,7 @@ class Game {
 
   void _switchFloor() {
     final target = pendingFloor!;
+    final wasRoof = fi == roofFloor;
     pendingFloor = null;
     fi = target;
     p.pos = tileCenter(pendingArrival!);
@@ -1073,6 +1079,11 @@ class Game {
       if (intros[fi].isNotEmpty) say(intros[fi], const Color(0xFFAAAAAA));
     }
     _checkpoint();
+    if (fi == roofFloor) {
+      audio.startRain(volume: 0.7);
+    } else if (target != roofFloor && wasRoof) {
+      audio.startDrone();
+    }
     if (fi == roofFloor && !roofWave) _roofAmbush();
   }
 

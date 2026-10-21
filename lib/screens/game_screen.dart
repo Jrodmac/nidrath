@@ -43,10 +43,14 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   void initState() {
     super.initState();
     game = Game(save: widget.resume ? SaveStore.read() : null);
-    GameAudio.instance.startDrone();
+    _startAmbient();
     _ticker = createTicker(_tick)..start();
     WidgetsBinding.instance.addObserver(this);
   }
+
+  /// Lluvia si se continúa en la azotea; el zumbido del centro comercial en el resto.
+  void _startAmbient() =>
+      game.fi == roofFloor ? GameAudio.instance.startRain(volume: 0.7) : GameAudio.instance.startDrone();
 
   // Si sales de la app o te llaman, la partida se pausa sola.
   @override
@@ -166,7 +170,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       game = Game(save: resume ? SaveStore.read() : null);
       paused = false;
       _runHeld = false;
-      GameAudio.instance.startDrone();
+      _startAmbient();
     });
   }
 
@@ -515,8 +519,8 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   /// Botonera del ascensor: las plantas donde no para salen tachadas.
   Widget _elevatorPanel() {
     return Positioned(
-      right: 200,
-      bottom: 110,
+      right: 300,
+      bottom: 40,
       child: Container(
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
