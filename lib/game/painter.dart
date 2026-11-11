@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'fp_view.dart';
 import 'game.dart';
 import 'sprites.dart';
+import 'thug_art.dart';
 import 'world.dart';
 
 class GamePainter extends CustomPainter {
@@ -338,7 +339,12 @@ class GamePainter extends CustomPainter {
       Paint()
         ..shader = ui.Gradient.radial(center, 45, [Color.fromRGBO(255, 230, 160, 0.45 * fade), const Color(0x00FFE6A0)]),
     );
-    sp.icons[itemInfo[r.item]!.icon]!.draw(canvas, center, 64 * pop, opacity: fade);
+    final icon = itemInfo[r.item]!.icon;
+    if (sp.icons[icon] != null) {
+      sp.icons[icon]!.draw(canvas, center, 64 * pop, opacity: fade);
+    } else {
+      ThugArt.drawIcon(canvas, icon, center, 80 * pop, opacity: fade);
+    }
     text('¡${itemInfo[r.item]!.name}!', Offset(center.dx, panel.bottom - 30), 17, const Color(0xFFE8C468));
   }
 

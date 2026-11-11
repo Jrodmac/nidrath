@@ -9,6 +9,7 @@ import '../game/game.dart';
 import '../game/save.dart';
 import '../game/painter.dart';
 import '../game/sprites.dart';
+import '../game/thug_art.dart';
 import '../game/world.dart';
 import 'ending_screen.dart';
 import 'splash_screen.dart';
@@ -153,6 +154,10 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       input.use = ItemType.pills;
     } else if (k == LogicalKeyboardKey.digit5) {
       input.use = ItemType.glasses;
+    } else if (k == LogicalKeyboardKey.digit6) {
+      input.use = ItemType.grenade;
+    } else if (k == LogicalKeyboardKey.keyR) {
+      input.swap = true;
     } else {
       return KeyEventResult.ignored;
     }
@@ -267,11 +272,27 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                 size: 88,
                 color: const Color(0xFF8A1C1C),
                 onDown: () => input.attack = true,
-                badge: p.hasPistol ? '${p.ammo}' : null,
-                child: _Icon(p.hasPistol && p.ammo > 0 ? 'pistol' : 'pipe', 40),
+                badge: switch (game.weapon) {
+                  Weapon.pistol => '${p.ammo}',
+                  Weapon.shotgun => '${p.shells}',
+                  _ => null,
+                },
+                child: _Icon(game.weapon!.name, 40),
               )
             : _runButton(88),
       ),
+      // Cambiar de arma: muestra la siguiente.
+      if (game.usableWeapons.length > 1)
+        Positioned(
+          right: 4,
+          bottom: 104,
+          child: _RoundButton(
+            size: 40,
+            color: const Color(0xFF3A2A2A),
+            onDown: () => input.swap = true,
+            child: _Icon(_nextWeapon().name, 24),
+          ),
+        ),
       Positioned(
         right: 120,
         bottom: 22,
@@ -326,6 +347,11 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     ];
   }
 
+  Weapon _nextWeapon() {
+    final all = game.usableWeapons;
+    return all[(all.indexOf(game.weapon!) + 1) % all.length];
+  }
+
   Widget _runButton(double size) => _RoundButton(
         size: size,
         color: _runHeld ? const Color(0xFF2A6A3A) : const Color(0xFF1E3A26),
@@ -368,6 +394,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
       ItemType.bandage,
       ItemType.painkiller,
       ItemType.pills,
+      ItemType.grenade,
     ]) {
       final n = p.inv[t] ?? 0;
       if (n <= 0) continue;
@@ -434,12 +461,17 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
             children: [
               _pips('SALUD', p.hp, const Color(0xFFD03030), p.darkWound ? const Color(0xFF8E44AD) : null),
               const SizedBox(height: 4),
-              _pips('ENERGÍA', p.energy, const Color(0xFFE8C030), null, cap: p.energyCap),
+              _pips('ENERGÍA', p.energy, const Color(0xFFE8C030), null),
+              if (p.vest > 0) ...[
+                const SizedBox(height: 4),
+                _pips('CHALECO', p.vest.toDouble(), const Color(0xFF8A9A8A), null, count: Game.vestHits),
+              ],
               const SizedBox(height: 4),
               Wrap(spacing: 6, children: [
                 if (p.darkWound) _tag('HERIDA OSCURA', const Color(0xFF8E44AD)),
                 if (p.energy <= 0) _tag('AGOTADO', const Color(0xFFB06020)),
                 if (p.hasPipe) _tag('BARRA', const Color(0xFF555555)),
+                if (p.hasKnife) _tag('CUCHILLO', const Color(0xFF555555)),
                 if (p.wearingGlasses) _tag('GAFAS', const Color(0xFF8A6010)),
               ]),
             ],
@@ -479,19 +511,16 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
   }
 
   /// Con [cap], los cuadros entre el valor y el tope salen apagados: se recuperan descansando.
-  Widget _pips(String label, double value, Color color, Color? border, {double? cap}) {
+  Widget _pips(String label, double value, Color color, Color? border, {int count = 10}) {
     return Row(mainAxisSize: MainAxisSize.min, children: [
       SizedBox(width: 62, child: Text(label, style: _hudText(11, const Color(0xFFAAAAAA)))),
-      for (var i = 0; i < maxPoints; i++)
+      for (var i = 0; i < count; i++)
         Container(
           width: 11,
           height: 13,
           margin: const EdgeInsets.only(right: 2),
           decoration: BoxDecoration(
-            color: Color.lerp(
-                Color.lerp(const Color(0xFF1A1A1A), color.withValues(alpha: 1), cap == null ? 0 : (cap - i).clamp(0.0, 1.0) * 0.3),
-                color,
-                (value - i).clamp(0.0, 1.0)),
+            color: Color.lerp(const Color(0xFF1A1A1A), color, (value - i).clamp(0.0, 1.0)),
             border: Border.all(color: border ?? Colors.black, width: 2),
           ),
         ),
@@ -590,7 +619,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                   'Botón de acción: registrar, esconderse, usar, escaleras\n'
                   'Toca los objetos de abajo para usarlos\n'
                   'Ascensor: botón de acción y elige planta\n\n'
-                  'Parado o escondido recuperas el aliento; comer y beber, el resto\n'
+                  'Parado o escondido recuperas energía poco a poco; comiendo y bebiendo, de golpe\n'
                   'Sin armas no puedes atacar: corre y escóndete\n'
                   'en taquillas y probadores.\n'
                   'Si te quedas quieto mientras te apuntan, irán a la cabeza.',
@@ -683,18 +712,26 @@ class _Icon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) =>
-      CustomPaint(size: Size.square(size), painter: _IconPainter(Sprites.i.icons[name]!));
+      CustomPaint(size: Size.square(size), painter: _IconPainter(name));
 }
 
+/// Icono pixelado de siempre; los objetos nuevos, con su imagen.
 class _IconPainter extends CustomPainter {
-  final Sprite sprite;
-  _IconPainter(this.sprite);
+  final String name;
+  _IconPainter(this.name);
 
   @override
-  void paint(Canvas canvas, Size size) => sprite.draw(canvas, size.center(Offset.zero), size.width);
+  void paint(Canvas canvas, Size size) {
+    final sprite = Sprites.i.icons[name];
+    if (sprite != null) {
+      sprite.draw(canvas, size.center(Offset.zero), size.width);
+    } else {
+      ThugArt.drawIcon(canvas, name, size.center(Offset.zero), size.width);
+    }
+  }
 
   @override
-  bool shouldRepaint(covariant _IconPainter old) => old.sprite != sprite;
+  bool shouldRepaint(covariant _IconPainter old) => old.name != name;
 }
 
 class _RoundButton extends StatelessWidget {

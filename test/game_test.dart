@@ -43,7 +43,8 @@ void main() {
       final w = generateWorld(Random(seed));
       final why = 'seed $seed';
       final crates = w.floors.expand((f) => f.crates).toList();
-      expect(crates.where((c) => c.loot == ItemType.pistol).length, 3, reason: why);
+      expect(crates.where((c) => c.loot == ItemType.pistol).length, 6, reason: why);
+      expect(w.floors[groundFloor].crates.where((c) => c.loot == ItemType.pistol), isNotEmpty, reason: why);
       expect(crates.where((c) => c.loot == ItemType.ammo).length, 14, reason: why);
       expect(w.floors[groundFloor].crates.where((c) => c.loot == ItemType.pipe), isNotEmpty, reason: why);
       expect(w.floors[roofFloor].items.where((i) => i.type == ItemType.ammo).length, 2, reason: why);
@@ -102,6 +103,68 @@ void main() {
     expect(e.alive, isFalse);
   });
 
+  test('escopeta, cuchillo, granada y chaleco', () {
+    final g = Game();
+    final input = GameInput();
+    final f = g.floor;
+    for (final fl in g.world.floors) {
+      fl.enemies.clear();
+      fl.spawnTimer = 1e9;
+    }
+    final t = f.freeTiles.firstWhere((t) => [1, 2, 3, 4].every((i) => !f.solidAt(t.x + i, t.y)));
+    g.p.pos = tileCenter(t);
+    g.p.angle = 0;
+    void step([int n = 1]) {
+      for (var i = 0; i < n; i++) {
+        g.update(1 / 60, input);
+      }
+    }
+
+    // La escopeta tumba de cerca y gasta un cartucho; pasa a ser el arma elegida.
+    f.items.add(GroundItem(g.p.pos, ItemType.shotgun));
+    step();
+    expect(g.weapon, Weapon.shotgun);
+    final near = Enemy(g.p.pos + const Offset(2.5, 0), pi, 0);
+    f.enemies.add(near);
+    input.attack = true;
+    step(20);
+    expect(near.alive, isFalse);
+    expect(g.p.shells, 3);
+
+    // El cuchillo no se pierde y se elige cambiando de arma.
+    f.items.add(GroundItem(g.p.pos, ItemType.knife));
+    step();
+    expect(g.usableWeapons, [Weapon.shotgun, Weapon.knife]);
+    input.swap = true;
+    step();
+    expect(g.weapon, Weapon.knife);
+    final close = Enemy(g.p.pos + const Offset(1.8, 0), pi, 0);
+    f.enemies.add(close);
+    g.p.attackCd = 0;
+    input.attack = true;
+    step();
+    expect(close.alive, isFalse);
+    expect(g.p.hasKnife, isTrue);
+
+    // La granada acaba con todos los sicarios de la planta, estén donde estén.
+    final far = [for (final ft in f.freeTiles.take(5)) Enemy(tileCenter(ft), 0, 0)];
+    f.enemies.addAll(far);
+    g.p.inv[ItemType.grenade] = 1;
+    input.use = ItemType.grenade;
+    step(150);
+    expect(far.every((e) => !e.alive), isTrue);
+    expect(g.p.inv[ItemType.grenade], 0);
+
+    // El chaleco para tres balazos.
+    f.items.add(GroundItem(g.p.pos, ItemType.vest));
+    step();
+    expect(g.p.vest, Game.vestHits);
+    final hp = g.p.hp;
+    g.bullets.add(Bullet(g.p.pos - const Offset(1, 0), const Offset(1, 0), 30, false));
+    step(10);
+    expect(g.headshot || (g.p.vest == Game.vestHits - 1 && g.p.hp == hp), isTrue);
+  });
+
   test('el sicario se cansa y descansar recupera energía', () {
     final g = Game();
     final input = GameInput();
@@ -125,19 +188,21 @@ void main() {
     }
     expect(e.stamina, lessThanOrEqualTo(0), reason: 'a los 4 s se agota');
 
-    // Descansar recupera, pero solo hasta el tope del hambre.
+    // Descansar recupera despacio; comer o beber, de golpe.
     f.enemies.clear();
     g.p.energy = 2;
-    g.p.energyCap = 6;
-    for (var i = 0; i < 60 * 30; i++) {
+    for (var i = 0; i < 60 * 8; i++) {
       g.update(1 / 60, input);
     }
-    expect(g.p.energy, closeTo(g.p.energyCap, 0.01));
-    expect(g.p.energyCap, lessThan(6));
+    expect(g.p.energy, closeTo(2 + 8 * Game.restRegen, 0.05), reason: 'parado: una casilla cada 8 s');
     g.p.inv[ItemType.water] = 1;
-    final cap = g.p.energyCap;
+    final before = g.p.energy;
     g.useItem(ItemType.water);
-    expect(g.p.energyCap, closeTo(cap + 2, 0.01));
+    expect(g.p.energy, closeTo(before + 2, 0.01));
+    for (var i = 0; i < 60 * 120; i++) {
+      g.update(1 / 60, input);
+    }
+    expect(g.p.energy, closeTo(maxPoints, 0.01), reason: 'parado se llega a llenar del todo');
   });
 
   test('el punto de control guarda y recupera la partida', () {

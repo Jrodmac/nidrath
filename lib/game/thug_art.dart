@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 
+import 'package:flutter/painting.dart';
 import 'package:flutter/services.dart';
 
 /// Una pose recortada y dónde cae el eje del cuerpo dentro de la imagen (0..1).
@@ -44,8 +45,30 @@ class ThugArt {
   static const hideFiles = ['obj_locker', 'obj_probador'];
   static const itemNames = [
     'water', 'food', 'medkit', 'bandage', 'painkiller', 'pills', //
-    'pistol', 'ammo', 'pipe', 'manuscript', 'glasses',
+    'pistol', 'ammo', 'pipe', 'manuscript', 'glasses', //
+    'shotgun', 'shells', 'knife', 'grenade', 'vest',
   ];
+
+  /// Armas en la mano, vistas en primera persona.
+  static const handFiles = ['fp_shotgun', 'fp_shotgun_fire', 'fp_knife', 'fp_grenade', 'fp_pistol', 'fp_pipe'];
+
+  /// Dibuja el objeto [name] encajado en un cuadrado de lado [size].
+  /// Devuelve false si no hay imagen.
+  static bool drawIcon(Canvas c, String name, Offset center, double size, {double opacity = 1}) {
+    final im = _images['item_$name'];
+    if (im == null) return false;
+    final k = size / (im.width > im.height ? im.width : im.height);
+    final w = im.width * k, h = im.height * k;
+    c.drawImageRect(
+      im,
+      Rect.fromLTWH(0, 0, im.width.toDouble(), im.height.toDouble()),
+      Rect.fromCenter(center: center, width: w, height: h),
+      Paint()
+        ..filterQuality = FilterQuality.medium
+        ..color = Color.fromRGBO(0, 0, 0, opacity),
+    );
+    return true;
+  }
 
   static Future<void> _load() async {
     final files = [
@@ -56,6 +79,7 @@ class ThugArt {
       'obj_mannequin',
       'obj_box',
       for (final n in itemNames) 'item_$n',
+      ...handFiles,
     ];
     for (final f in files) {
       try {

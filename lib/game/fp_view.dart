@@ -106,6 +106,10 @@ class FpView {
       _weapon(canvas);
     }
     _aimWarning(canvas);
+    if (g.boomFlash > 0) {
+      canvas.drawRect(Rect.fromLTWH(0, 0, W, H),
+          Paint()..color = Color.fromRGBO(255, 170, 80, 0.45 * g.boomFlash * g.boomFlash));
+    }
   }
 
   static Color _mix(Color a, int b, double t) => Color.lerp(a, Color(b), t)!;
@@ -132,6 +136,8 @@ class FpView {
     if (d < ar) _add(0.5 * (1 - d / ar), 1, 0.95, 0.85);
     if (g.muzzleFlash > 0 && d < 7) _add((g.muzzleFlash / 0.12).clamp(0.0, 1.0) * (1 - d / 7), 1, 0.85, 0.55);
     if (g.magicFlash > 0 && d < 8) _add(min(1.0, g.magicFlash) * (1 - d / 8), 0.7, 0.35, 1);
+    // La granada ilumina la planta entera un instante.
+    if (g.boomFlash > 0) _add(g.boomFlash * g.boomFlash * 1.2, 1, 0.62, 0.3);
   }
 
   /// Toda la luz que llega a un punto del mundo; el resultado queda en lr, lg, lb.
@@ -703,6 +709,81 @@ class FpView {
     return atan2(-(ca * fx + sa * fy), ca * rx + sa * ry);
   }
 
+  /// Caseta de la escalera: un bloque hasta el techo con una puerta cortafuegos
+  /// en cada lado y encima el cartel luminoso «ESCALERA ▲/▼». Dentro de la
+  /// casilla (ya has entrado por la puerta) no se dibuja.
+  void _stairwell(Point<int>? at, bool up) {
+    if (at == null) return;
+    const m = 0.06;
+    final r = Rect.fromLTRB(at.x + m, at.y + m, at.x + 1 - m, at.y + 1 - m);
+    if (r.inflate(0.05).contains(Offset(px, py))) return;
+    _putSolid(r, (c, tint) {
+      const wallC = Color(0xFF8C8F88);
+      _box(c, r.left, r.top, r.right, r.bottom, 0, wallH, wallC, tint);
+      // Las caras que se ven, cada una con su puerta.
+      final faces = <(Offset, Offset)>[
+        if (px < r.left) (r.bottomLeft, r.topLeft),
+        if (px > r.right) (r.topRight, r.bottomRight),
+        if (py < r.top) (r.topLeft, r.topRight),
+        if (py > r.bottom) (r.bottomRight, r.bottomLeft),
+      ];
+      for (final (e0, e1) in faces) {
+        _stairDoor(c, e0, e1, up, tint);
+      }
+    });
+  }
+
+  void _stairDoor(Canvas c, Offset e0, Offset e1, bool up, Color tint) {
+    final q = <Offset>[];
+    for (final (e, z) in [(e0, wallH), (e1, wallH), (e1, 0.0), (e0, 0.0)]) {
+      if (!_proj(e)) return;
+      q.add(Offset(_sx, horizon - (z - eye) * _sc));
+    }
+    // De izquierda a derecha según se mira.
+    if (q[0].dx > q[1].dx) {
+      q.setAll(0, [q[1], q[0], q[3], q[2]]);
+    }
+    if ((q[1].dx - q[0].dx).abs() < 3) return;
+    Color lit(Color col, [double k = 1]) => Color.fromARGB(
+          255,
+          (col.r * tint.r * k * 255).round().clamp(0, 255),
+          (col.g * tint.g * k * 255).round().clamp(0, 255),
+          (col.b * tint.b * k * 255).round().clamp(0, 255),
+        );
+    // Coordenadas de la cara en centímetros: 88 de ancho por 180 de alto.
+    const lw = 88.0, lh = 180.0;
+    c.save();
+    c.transform(_quadMatrix(q, lw, lh));
+    final paint = Paint();
+    // Marco, hoja de la puerta, ventanuco y barra antipánico.
+    c.drawRect(const Rect.fromLTRB(14, 52, 74, 180), paint..color = lit(const Color(0xFF3A3D3A)));
+    c.drawRect(const Rect.fromLTRB(18, 56, 70, 180), paint..color = lit(const Color(0xFF5E6B60)));
+    c.drawRect(const Rect.fromLTRB(36, 68, 52, 96), paint..color = lit(const Color(0xFF2A2E30)));
+    c.drawRect(const Rect.fromLTRB(37.5, 69.5, 50.5, 94.5), paint..color = lit(const Color(0xFF7A9AA6), 0.5));
+    c.drawRect(const Rect.fromLTRB(21, 116, 67, 122), paint..color = lit(const Color(0xFFB8BCB8)));
+    c.drawRect(const Rect.fromLTRB(62, 112, 67, 126), paint..color = lit(const Color(0xFF8A8E8A)));
+    // Cartel luminoso: brilla solo, no depende de la luz que le llegue.
+    const sign = Rect.fromLTRB(10, 18, 78, 44);
+    c.drawRect(sign.inflate(1.5), paint..color = const Color(0xFF1A1C1A));
+    c.drawRect(sign, paint..color = const Color(0xFF18A050));
+    final tp = TextPainter(
+      text: TextSpan(
+        text: up ? '▲ ESCALERA' : '▼ ESCALERA',
+        style: const TextStyle(fontFamily: 'Roboto', fontWeight: FontWeight.w800, fontSize: 40, color: Colors.white),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final k = min(sign.width * 0.88 / tp.width, sign.height * 0.8 / tp.height);
+    c.translate(sign.center.dx, sign.center.dy);
+    c.scale(k);
+    tp.paint(c, Offset(-tp.width / 2, -tp.height / 2));
+    tp.dispose();
+    c.restore();
+    // Un poco de resplandor verde alrededor del cartel.
+    final mid = Offset.lerp(Offset.lerp(q[0], q[1], 0.5)!, Offset.lerp(q[3], q[2], 0.5)!, 31 / lh)!;
+    _glow(c, mid, (q[1].dx - q[0].dx).abs() * 0.6, const Color(0x3330FF80));
+  }
+
   /// Caja con las caras que se ven desde la cámara.
   void _box(Canvas c, double x0, double y0, double x1, double y1, double z0, double z1, Color color, Color tint) {
     final paint = Paint();
@@ -766,33 +847,9 @@ class FpView {
       });
     }
 
-    // Escalera de subida: tres peldaños.
-    final up = f.up;
-    if (up != null) {
-      final x = up.x.toDouble(), y = up.y.toDouble();
-      _putSolid(Rect.fromLTWH(x, y, 1, 1), (c, tint) {
-        for (var i = 0; i < 3; i++) {
-          _box(c, x + 0.08, y + 0.08 + i * 0.28, x + 0.92, y + 0.36 + i * 0.28, 0, 0.66 - i * 0.22,
-              const Color(0xFF9AA89A), tint);
-        }
-      });
-    }
-    void arrow(Point<int>? at, bool upward) {
-      if (at == null) return;
-      _put(tileCenter(at), 0.3, (c, sx, sc, fy) {
-        final y = fy - 1.35 * sc, s = 0.2 * sc * (upward ? 1 : -1);
-        c.drawPath(
-            Path()
-              ..moveTo(sx, y - s)
-              ..lineTo(sx + s.abs(), y + s)
-              ..lineTo(sx - s.abs(), y + s)
-              ..close(),
-            Paint()..color = upward ? const Color(0xCC6FBF73) : const Color(0xCCBF6F6F));
-      });
-    }
-
-    arrow(f.up, true);
-    arrow(f.down, false);
+    // Escaleras: una caseta de escalera de emergencia con su puerta y el cartel verde.
+    _stairwell(f.up, true);
+    _stairwell(f.down, false);
 
     const crateW = [1.3, 0.95, 1.2, 0.5, 0.75];
     const crateH = [1.7, 1.75, 1.15, 0.7, 1.75]; // estantería, máquina, mostrador, papelera, armario
@@ -1117,6 +1174,14 @@ class FpView {
       e0 = e1;
       e1 = t;
     }
+    // Si un extremo queda detrás de la cámara, el panel se recorta hasta donde se ve.
+    double depthOf(Offset e) => (e.dx - px) * fx + (e.dy - py) * fy;
+    const nearD = 0.15;
+    final da0 = depthOf(e0), da1 = depthOf(e1);
+    if (da0 < nearD && da1 < nearD) return;
+    if (da0 < nearD) e0 = Offset.lerp(e0, e1, (nearD - da0) / (da1 - da0))!;
+    if (da1 < nearD) e1 = Offset.lerp(e1, e0, (nearD - da1) / (da0 - da1))!;
+    final dE0 = max(nearD, depthOf(e0)), dE1 = max(nearD, depthOf(e1));
     final pts = <Offset>[];
     var minD = double.infinity, x0 = double.infinity, x1 = -double.infinity;
     for (final (e, z) in [(e0, zTop), (e1, zTop), (e1, zBot), (e0, zBot)]) {
@@ -1136,7 +1201,38 @@ class FpView {
     // Altura del techo en cada extremo, para las varillas.
     final ceil0 = horizon - (wallH - eye) * (pts[3].dy - pts[0].dy) / (zTop - zBot);
     final ceil1 = horizon - (wallH - eye) * (pts[2].dy - pts[1].dy) / (zTop - zBot);
+    // El panel va en diagonal: cada columna tiene su profundidad (1/d varía
+    // lineal en pantalla) y solo se pinta donde no hay una pared más cerca.
+    final visible = Path();
+    {
+      final xa = pts[0].dx, xb = pts[1].dx;
+      final i0 = (max(0.0, x0) / _colW).floor(), i1 = min(_n, (min(W, x1) / _colW).ceil());
+      int? run;
+      for (var i = i0; i <= i1; i++) {
+        var show = false;
+        if (i < i1) {
+          final t = xb == xa ? 0.0 : (((i + 0.5) * _colW - xa) / (xb - xa)).clamp(0.0, 1.0);
+          final d = 1 / ((1 - t) / dE0 + t / dE1);
+          show = _z[i] > d;
+        }
+        if (show && run == null) run = i;
+        if (!show && run != null) {
+          visible.addRect(Rect.fromLTRB(run * _colW, -40, i * _colW, H + 40));
+          run = null;
+        }
+      }
+    }
     _items.add(_Item(minD, x0, x1, (c) {
+      c.save();
+      c.clipPath(visible);
+      _drawShopSign(c, pts, ceil0, ceil1, body, rim, ink, on, front, l, text, level, zTop - zBot, (e1 - e0).distance);
+      c.restore();
+    }));
+  }
+
+  void _drawShopSign(Canvas c, List<Offset> pts, double ceil0, double ceil1, Color body, Color rim, Color ink, bool on,
+      bool front, Lamp l, String text, double level, double panelH, double panelW) {
+    {
       final hpx = max(pts[3].dy - pts[0].dy, pts[2].dy - pts[1].dy);
       final shape = Path()..addPolygon(pts, true);
       final rod = Paint()
@@ -1173,7 +1269,7 @@ class FpView {
         textDirection: TextDirection.ltr,
       )..layout();
       final lh = tp.height * 1.3;
-      final lw = lh * (2 * l.span) / (zTop - zBot);
+      final lw = lh * panelW / panelH;
       final k = min(1.0, 0.86 * lw / tp.width);
       c.save();
       c.transform(_quadMatrix(pts, lw, lh));
@@ -1182,7 +1278,7 @@ class FpView {
       tp.paint(c, Offset(-tp.width / 2, -tp.height / 2));
       c.restore();
       tp.dispose();
-    }));
+    }
   }
 
   /// SALIDA, ASCENSOR: una caja luminosa colgada del techo, como las de verdad.
@@ -1292,8 +1388,96 @@ class FpView {
   /// El arma en la mano, abajo, con el vaivén de andar.
   void _weapon(Canvas c) {
     final p = g.p;
-    final gun = p.hasPistol && p.ammo > 0;
-    if (!gun && !p.hasPipe) return;
+    final u = H * 0.011;
+    final sway = Offset(sin(p.walkPhase * 1.5) * u * 1.6, cos(p.walkPhase * 3).abs() * u * 1.2);
+    // Lanzando la granada: la mano sube y la suelta.
+    if (p.throwT > 0) {
+      final k = 1 - p.throwT / 0.6;
+      _hand(c, 'fp_grenade', left: false, h: 0.62, off: Offset(-k * W * 0.05, -sin(k * pi) * H * 0.22) + sway,
+          opacity: (1.6 - k * 1.6).clamp(0.0, 1.0));
+      return;
+    }
+    final w = g.weapon;
+    if (w == null) return;
+    switch (w) {
+      case Weapon.shotgun:
+        final rec = (p.shotT / 0.3).clamp(0.0, 1.0);
+        final fire = p.shotT > 0.2 && ThugArt.prop('fp_shotgun_fire') != null;
+        _hand(c, fire ? 'fp_shotgun_fire' : 'fp_shotgun',
+            left: true, h: 0.78, off: Offset(0, rec * u * 7) + sway, rot: rec * 0.05);
+        if (g.muzzleFlash > 0) {
+          final k = (g.muzzleFlash / 0.16).clamp(0.0, 1.0);
+          _glow(c, Offset(W * 0.5, H * 0.32), 40 * u, Color.fromRGBO(255, 190, 110, 0.4 * k));
+        }
+      case Weapon.pistol:
+        if (ThugArt.prop('fp_pistol') == null) return _vectorWeapon(c, true);
+        final rec = (p.shotT / 0.18).clamp(0.0, 1.0);
+        _hand(c, 'fp_pistol', left: false, h: 0.72, off: Offset(0, rec * u * 6) + sway, rot: -rec * 0.06);
+        if (g.muzzleFlash > 0) {
+          final k = (g.muzzleFlash / 0.12).clamp(0.0, 1.0);
+          final m = _handPoint('fp_pistol', left: false, h: 0.72, at: const Offset(0.43, 0.06)) + sway;
+          _glow(c, m, 26 * u, Color.fromRGBO(255, 200, 120, 0.55 * k));
+          _glow(c, m, 9 * u, Color.fromRGBO(255, 245, 190, k));
+        }
+      case Weapon.knife:
+        // Puñalada: el brazo se estira hacia delante.
+        final sw = sin((p.swingT / 0.18).clamp(0.0, 1.0) * pi);
+        _hand(c, 'fp_knife', left: true, h: 0.66, off: sway, scale: 1 + sw * 0.22, rot: sw * 0.08);
+      case Weapon.pipe:
+        if (ThugArt.prop('fp_pipe') == null) return _vectorWeapon(c, false);
+        // Barra: golpe de derecha a izquierda.
+        final sw = sin((p.swingT / 0.25).clamp(0.0, 1.0) * pi);
+        _hand(c, 'fp_pipe', left: false, h: 0.8, off: sway, rot: -sw * 0.3);
+    }
+  }
+
+  /// Imagen del arma pegada al borde de la pantalla por donde entra el brazo
+  /// (izquierda o derecha) y por abajo. [scale] y [rot] giran sobre esa esquina.
+  void _hand(Canvas c, String file,
+      {required bool left,
+      required double h,
+      Offset off = Offset.zero,
+      double rot = 0,
+      double scale = 1,
+      double opacity = 1}) {
+    final im = ThugArt.prop(file);
+    if (im == null) return;
+    final dst = _handRect(im, left, h);
+    final pivot = left ? dst.bottomLeft : dst.bottomRight;
+    c.save();
+    c.translate(pivot.dx + off.dx, pivot.dy + off.dy);
+    c.rotate(rot);
+    c.scale(scale);
+    c.translate(-pivot.dx, -pivot.dy);
+    c.drawImageRect(
+      im,
+      Rect.fromLTWH(0, 0, im.width.toDouble(), im.height.toDouble()),
+      dst,
+      Paint()
+        ..filterQuality = FilterQuality.medium
+        ..color = Color.fromRGBO(0, 0, 0, opacity),
+    );
+    c.restore();
+  }
+
+  Rect _handRect(ui.Image im, bool left, double h) {
+    final hh = H * h, ww = hh * im.width / im.height;
+    // Un poco más allá del borde, para que el vaivén no deje ver el corte.
+    final bottom = H * 1.03;
+    final x0 = left ? -W * 0.02 : W * 1.02 - ww;
+    return Rect.fromLTWH(x0, bottom - hh, ww, hh);
+  }
+
+  /// Un punto de la imagen del arma (0..1) en la pantalla, sin animación.
+  Offset _handPoint(String file, {required bool left, required double h, required Offset at}) {
+    final im = ThugArt.prop(file)!;
+    final r = _handRect(im, left, h);
+    return Offset(r.left + r.width * at.dx, r.top + r.height * at.dy);
+  }
+
+  /// Pistola o barra dibujadas a mano, por si faltan las imágenes.
+  void _vectorWeapon(Canvas c, bool gun) {
+    final p = g.p;
     final u = H * 0.011;
     final sway = Offset(sin(p.walkPhase * 1.5) * u * 1.6, cos(p.walkPhase * 3).abs() * u * 1.2);
     const skin = Color(0xFFB8875A), sleeve = Color(0xFF34492F);

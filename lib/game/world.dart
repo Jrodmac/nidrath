@@ -28,7 +28,10 @@ const floorNames = [
 
 enum Tile { wall, floor, shop, stairUp, stairDown, elevator, car }
 
-enum ItemType { water, food, medkit, bandage, painkiller, pills, pistol, ammo, pipe, manuscript, glasses }
+enum ItemType {
+  water, food, medkit, bandage, painkiller, pills, pistol, ammo, pipe, manuscript, glasses, //
+  shotgun, shells, knife, grenade, vest,
+}
 
 class ItemInfo {
   final String name;
@@ -49,6 +52,11 @@ const itemInfo = {
   // Escrito con tinta invisible: parece una hoja en blanco.
   ItemType.manuscript: ItemInfo('Hoja en blanco', 'sheet'),
   ItemType.glasses: ItemInfo('Gafas', 'glasses'),
+  ItemType.shotgun: ItemInfo('Escopeta', 'shotgun'),
+  ItemType.shells: ItemInfo('Cartuchos', 'shells'),
+  ItemType.knife: ItemInfo('Cuchillo', 'knife'),
+  ItemType.grenade: ItemInfo('Granada', 'grenade'),
+  ItemType.vest: ItemInfo('Chaleco antibalas', 'vest'),
 };
 
 const crateNames = ['estantería', 'máquina expendedora', 'mostrador', 'papelera', 'armario', 'coche'];
@@ -907,13 +915,21 @@ World generateWorld(Random rng) {
     for (var i = 0; i < 9; i++) ItemType.bandage,
     for (var i = 0; i < 7; i++) ItemType.painkiller,
     for (var i = 0; i < 8; i++) ItemType.pills,
-    for (var i = 0; i < 3; i++) ItemType.pistol,
+    for (var i = 0; i < 5; i++) ItemType.pistol,
     for (var i = 0; i < 14; i++) ItemType.ammo,
     for (var i = 0; i < 2; i++) ItemType.pipe,
+    for (var i = 0; i < 2; i++) ItemType.shotgun,
+    for (var i = 0; i < 8; i++) ItemType.shells,
+    for (var i = 0; i < 2; i++) ItemType.knife,
+    for (var i = 0; i < 4; i++) ItemType.grenade,
+    for (var i = 0; i < 3; i++) ItemType.vest,
   ];
   // Una barra de hierro siempre en la planta baja: hay que poder defenderse.
   final ground = floors[groundFloor].crates.where((c) => c.kind != carCrate).toList();
   ground[rng.nextInt(ground.length)].loot = ItemType.pipe;
+  // Y una pistola: los sicarios salen desde el principio.
+  final free = ground.where((c) => c.loot == null).toList();
+  free[rng.nextInt(free.length)].loot = ItemType.pistol;
   var li = 0;
   for (final c in allCrates) {
     if (c.loot != null) continue;
@@ -927,7 +943,10 @@ World generateWorld(Random rng) {
   final keyFloors = [for (var i = 0; i < roofFloor; i++) i]..shuffle(rng);
   void hide(int fi, ItemType t) {
     // Nunca a costa de un arma o de munición.
-    const keep = {ItemType.pipe, ItemType.manuscript, ItemType.pistol, ItemType.ammo};
+    const keep = {
+      ItemType.pipe, ItemType.manuscript, ItemType.pistol, ItemType.ammo, //
+      ItemType.shotgun, ItemType.shells, ItemType.knife, ItemType.grenade, ItemType.vest,
+    };
     final options = floors[fi].crates.where((c) => !keep.contains(c.loot)).toList();
     final c = options[rng.nextInt(options.length)];
     c.loot = t;

@@ -17,19 +17,28 @@ class GameInput {
   bool attack = false;
   bool action = false;
   bool magic = false;
+  bool swap = false; // cambiar de arma
   ItemType? use;
 }
+
+/// Armas que se pueden empuñar. La granada va aparte: se gasta al usarla.
+enum Weapon { pipe, knife, pistol, shotgun }
 
 class Player {
   Offset pos;
   double angle = -pi / 2;
   double hp = maxPoints;
   double energy = maxPoints;
-  /// Hasta dónde se recupera descansando; baja con el hambre y sube comiendo o bebiendo.
-  double energyCap = maxPoints;
   bool darkWound = false;
   bool hasPistol = false;
   bool hasPipe = false;
+  bool hasKnife = false;
+  bool hasShotgun = false;
+  int shells = 0;
+  /// Balazos que aún aguanta el chaleco (0: sin chaleco).
+  int vest = 0;
+  /// El arma elegida; si se queda sin munición se usa la mejor que quede.
+  Weapon? weapon;
   bool hasManuscript = false; // la hoja en blanco
   bool manuscriptRevealed = false; // con las gafas aparecen las letras
   bool hasGlasses = false;
@@ -38,7 +47,8 @@ class Player {
   int ammo = 0;
   final Map<ItemType, int> inv = {};
   double attackCd = 0;
-  double shotT = 0, swingT = 0; // animación del disparo y del golpe de barra
+  double shotT = 0, swingT = 0; // animación del disparo y del golpe cuerpo a cuerpo
+  double throwT = 0; // animación de lanzar la granada
   double magicCd = 0;
   double hurtT = 0;
   double stillT = 0;
@@ -61,8 +71,10 @@ class Bullet {
   final Offset dir;
   final double speed;
   final bool fromPlayer;
-  double life = 0.9;
-  Bullet(this.pos, this.dir, this.speed, this.fromPlayer);
+  double life;
+  /// Daño al carnicero (los perdigones hacen menos que una bala).
+  final double power;
+  Bullet(this.pos, this.dir, this.speed, this.fromPlayer, {this.life = 0.9, this.power = 1});
 }
 
 /// Fogonazo de un disparo: ilumina un instante lo que hay alrededor.
@@ -105,6 +117,8 @@ class Game {
   static const double coneLenBase = 13.0;
   static const double ambientBase = 2.6;
   static const double turnSpeed = 2.8; // radianes por segundo con el joystick a tope
+  /// Energía que se recupera por segundo estando parado (una casilla cada 8 s).
+  static const double restRegen = 0.125;
   double flashPower = 1;
   double flashOutT = 0;
   double nextFlashFail = 40;
@@ -115,6 +129,9 @@ class Game {
   List<Offset> flashPoly = const [];
   double muzzleFlash = 0;
   double magicFlash = 0;
+  /// Explosión de granada en curso (1 → 0).
+  double boomFlash = 0;
+  double grenadeT = 0; // cuenta atrás hasta que estalla
 
   // Efectos
   double shake = 0;
@@ -212,10 +229,14 @@ class Game {
         'kills': kills,
         'hp': p.hp,
         'energy': p.energy,
-        'cap': p.energyCap,
         'dark': p.darkWound,
         'pistol': p.hasPistol,
         'pipe': p.hasPipe,
+        'knife': p.hasKnife,
+        'shotgun': p.hasShotgun,
+        'shells': p.shells,
+        'vest': p.vest,
+        'weapon': p.weapon?.name,
         'sheet': p.hasManuscript,
         'revealed': p.manuscriptRevealed,
         'glasses': p.hasGlasses,
@@ -246,11 +267,16 @@ class Game {
     kills = s['kills'] as int;
     // Volver con media vida como mínimo: si no, un mal guardado sería una trampa.
     p.hp = max((s['hp'] as num).toDouble(), maxPoints / 2);
-    p.energyCap = max((s['cap'] as num? ?? maxPoints).toDouble(), maxPoints / 2);
-    p.energy = p.energyCap;
+    p.energy = maxPoints;
     p.darkWound = s['dark'] as bool;
     p.hasPistol = s['pistol'] as bool;
     p.hasPipe = s['pipe'] as bool;
+    p.hasKnife = s['knife'] as bool? ?? false;
+    p.hasShotgun = s['shotgun'] as bool? ?? false;
+    p.shells = s['shells'] as int? ?? 0;
+    p.vest = s['vest'] as int? ?? 0;
+    final w = s['weapon'] as String?;
+    p.weapon = w == null ? null : Weapon.values.byName(w);
     p.hasManuscript = s['sheet'] as bool;
     p.manuscriptRevealed = s['revealed'] as bool;
     p.hasGlasses = s['glasses'] as bool;
@@ -354,6 +380,7 @@ class Game {
     input.magic = false;
     input.use = null;
     input.look = 0;
+    input.swap = false;
   }
 
   void _updateFx(double dt) {
@@ -365,6 +392,7 @@ class Game {
     zoomPunch = max(0, zoomPunch - dt * 1.5);
     muzzleFlash = max(0, muzzleFlash - dt);
     magicFlash = max(0, magicFlash - dt);
+    boomFlash = max(0, boomFlash - dt * 0.8);
     bigTextT = max(0, bigTextT - dt);
     unarmedMsgT = max(0, unarmedMsgT - dt);
     if (searchResult != null) {
@@ -400,9 +428,11 @@ class Game {
     final fwd = -mv.dy;
     final mag = min(1.0, fwd.abs());
     final exhausted = p.energy <= 0;
+    var turning = false;
     if (hiding == null && transition <= 0.3) {
       final turn = mv.dx.abs() < 0.18 ? 0.0 : (mv.dx.abs() - 0.18) / 0.82 * mv.dx.sign;
       p.angle = (p.angle + turn.clamp(-1.0, 1.0) * turnSpeed * dt + input.look) % (2 * pi);
+      turning = turn != 0 || input.look != 0;
     }
     p.moving = mag > 0.12 && transition <= 0.3;
     p.running = p.moving && fwd > 0 && (input.run || mag > 0.92) && !exhausted;
@@ -418,7 +448,8 @@ class Game {
         say('Dejas de registrar.', const Color(0xFF888888));
       }
     } else {
-      p.stillT += dt;
+      // Girarse también es moverse: solo quien no reacciona es blanco fácil.
+      p.stillT = turning ? 0 : p.stillT + dt;
       p.vel = Offset.zero;
     }
 
@@ -436,12 +467,11 @@ class Game {
     }
 
     final before = p.energy;
-    p.energyCap = max(0, p.energyCap - dt / 35);
     if (!p.moving || hiding != null) {
-      // Parado o escondido recuperas el aliento, pero no el hambre.
-      p.energy = min(p.energyCap, p.energy + dt * 0.25);
+      // Parado o escondido se recupera, pero despacio: comer y beber es lo rápido.
+      p.energy = min(maxPoints, p.energy + dt * restRegen);
     }
-    p.energy = max(0, min(p.energyCap, p.energy - dt * (p.running ? 1 / 12 : 0)));
+    p.energy = max(0, min(maxPoints, p.energy - dt * (p.running ? 1 / 12 : 0)));
     if (before > 3 && p.energy <= 3) {
       say('Te flaquean las piernas. Bebe o come algo pronto.', const Color(0xFFE8C030));
     }
@@ -454,6 +484,11 @@ class Game {
     p.attackCd = max(0, p.attackCd - dt);
     p.shotT = max(0, p.shotT - dt);
     p.swingT = max(0, p.swingT - dt);
+    p.throwT = max(0, p.throwT - dt);
+    if (grenadeT > 0) {
+      grenadeT -= dt;
+      if (grenadeT <= 0) _explode();
+    }
     p.magicCd = max(0, p.magicCd - dt);
     p.hurtT = max(0, p.hurtT - dt);
 
@@ -464,6 +499,7 @@ class Game {
       }
     }
 
+    if (input.swap) swapWeapon();
     if (input.attack) _attack();
     if (input.action) _action();
     if (input.magic) castMagic();
@@ -504,11 +540,35 @@ class Game {
         } else {
           p.hasPistol = true;
           p.ammo += 4;
+          if (p.weapon != Weapon.shotgun) p.weapon = Weapon.pistol;
           say('¡Una pistola! Con 4 balas.', const Color(0xFFE8C468));
         }
       case ItemType.ammo:
         p.ammo += 4;
         say('Munición: +4 balas.', const Color(0xFFE8C468));
+      case ItemType.shotgun:
+        if (p.hasShotgun) {
+          p.shells += 3;
+          say('Otra escopeta. Le sacas 3 cartuchos.', const Color(0xFFE8C468));
+        } else {
+          p.hasShotgun = true;
+          p.shells += 4;
+          p.weapon = Weapon.shotgun;
+          say('¡Una escopeta! Con 4 cartuchos.', const Color(0xFFE8C468));
+        }
+      case ItemType.shells:
+        p.shells += 4;
+        say('Cartuchos: +4.', const Color(0xFFE8C468));
+      case ItemType.knife:
+        if (p.hasKnife) {
+          say('Otro cuchillo. Ya tienes uno.', const Color(0xFF999999));
+        } else {
+          p.hasKnife = true;
+          say('Un cuchillo. Rápido y silencioso, pero hay que acercarse.', const Color(0xFFE8C468));
+        }
+      case ItemType.vest:
+        p.vest = vestHits;
+        say('Chaleco antibalas: aguanta $vestHits balazos. La cabeza sigue al aire.', const Color(0xFFE8C468));
       case ItemType.pipe:
         if (p.hasPipe) {
           say('Otra barra de hierro. Ya tienes una.', const Color(0xFF999999));
@@ -540,8 +600,7 @@ class Game {
     switch (t) {
       case ItemType.water:
       case ItemType.food:
-        p.energyCap = min(maxPoints, p.energyCap + 2);
-        p.energy = min(p.energyCap, p.energy + 2);
+        p.energy = min(maxPoints, p.energy + 2);
         say(t == ItemType.water ? 'Bebes. +2 energía.' : 'Comes algo. +2 energía.', const Color(0xFFE8D468));
         audio.play(Sfx.pickup, volume: 0.5);
       case ItemType.medkit:
@@ -551,6 +610,16 @@ class Game {
         say('${itemInfo[t]!.name}: +2 salud.', const Color(0xFF9FE0A0));
         if (p.darkWound) say('La herida oscura no se cierra... necesitas magia.', const Color(0xFFB98CFF));
         audio.play(Sfx.pickup, volume: 0.5);
+      case ItemType.grenade:
+        if (grenadeT > 0) {
+          p.inv[t] = n;
+          return;
+        }
+        // Le quitas la anilla y la lanzas: a los dos segundos, la planta entera tiembla.
+        grenadeT = 1.6;
+        p.throwT = 0.6;
+        audio.play(Sfx.cock, volume: 0.8);
+        say('Quitas la anilla y la lanzas lejos...', const Color(0xFFE8C468));
       case ItemType.pills:
         final r = rng.nextDouble();
         if (r < 0.4) {
@@ -635,15 +704,76 @@ class Game {
     return best;
   }
 
-  bool get armed => (p.hasPistol && p.ammo > 0) || p.hasPipe;
+  static const int vestHits = 3;
+
+  bool _usable(Weapon w) => switch (w) {
+        Weapon.pipe => p.hasPipe,
+        Weapon.knife => p.hasKnife,
+        Weapon.pistol => p.hasPistol && p.ammo > 0,
+        Weapon.shotgun => p.hasShotgun && p.shells > 0,
+      };
+
+  /// Armas que se pueden usar ahora mismo, de la mejor a la peor.
+  List<Weapon> get usableWeapons => [for (final w in Weapon.values.reversed) if (_usable(w)) w];
+
+  /// El arma en la mano: la elegida si se puede usar; si no, la mejor que quede.
+  Weapon? get weapon {
+    final w = p.weapon;
+    if (w != null && _usable(w)) return w;
+    final all = usableWeapons;
+    return all.isEmpty ? null : all.first;
+  }
+
+  bool get armed => weapon != null;
+
+  /// Hay arma de fuego cargada en la mano: los sicarios se acobardan si les apuntas.
+  bool get gunInHand => weapon == Weapon.pistol || weapon == Weapon.shotgun;
+
+  void swapWeapon() {
+    final all = usableWeapons;
+    if (all.length < 2 || hiding != null) return;
+    final cur = weapon;
+    p.weapon = all[(all.indexOf(cur!) + 1) % all.length];
+    audio.play(Sfx.cock, volume: 0.35);
+  }
+
+  /// La granada: todos los sicarios de la planta caen. Al carnicero solo le hiere.
+  void _explode() {
+    boomFlash = 1;
+    shake = max(shake, 22);
+    whiteFlash = max(whiteFlash, 0.5);
+    HapticFeedback.heavyImpact();
+    audio.play(Sfx.thunder);
+    audio.play(Sfx.gunshot);
+    big('¡BOOM!', const Color(0xFFFFB050), 1.6);
+    var n = 0;
+    for (final e in floor.enemies) {
+      if (!e.alive) continue;
+      e.hp = 0;
+      e.state = EState.dead;
+      e.deadT = 0;
+      kills++;
+      n++;
+      for (var i = 0; i < 10; i++) {
+        final a = rng.nextDouble() * 2 * pi;
+        sparks.add(Spark(e.pos, Offset(cos(a), sin(a)) * (1 + rng.nextDouble() * 3), 0.5, const Color(0xFFFF9030)));
+      }
+    }
+    final b = floor.boss;
+    if (b != null && b.alive) _hitBoss(bossHp * 0.4);
+    say(n == 0 ? 'La explosión retumba por toda la planta. No había nadie.' : 'La explosión barre la planta. Silencio.',
+        const Color(0xFFFFB050));
+  }
 
   void _attack() {
     if (p.attackCd > 0 || transition > 0.3 || hiding != null) return;
-    if (!armed) {
-      if (p.hasPistol) audio.play(Sfx.cock, volume: 0.6);
+    final w = weapon;
+    if (w == null) {
+      final empty = p.hasPistol || p.hasShotgun;
+      if (empty) audio.play(Sfx.cock, volume: 0.6);
       if (unarmedMsgT <= 0) {
         unarmedMsgT = 4;
-        say(p.hasPistol ? 'Sin balas. Corre.' : 'No tienes armas. Corre y escóndete.', const Color(0xFFFF9060));
+        say(empty ? 'Sin munición. Corre.' : 'No tienes armas. Corre y escóndete.', const Color(0xFFFF9060));
       }
       return;
     }
@@ -651,19 +781,36 @@ class Game {
     final target = _autoAim();
     final aim = target != null ? (target - p.pos).direction : p.angle;
     final dir = Offset(cos(aim), sin(aim));
-    if (p.hasPistol && p.ammo > 0) {
-      p.ammo--;
-      p.attackCd = 0.35;
-      p.shotT = 0.18;
-      muzzleFlash = 0.12;
+    if (w == Weapon.pistol || w == Weapon.shotgun) {
+      final shotgun = w == Weapon.shotgun;
+      if (shotgun) {
+        // Perdigones abiertos y de poco alcance: de cerca tumban, de lejos se pierden.
+        p.shells--;
+        p.attackCd = 0.9;
+        p.shotT = 0.3;
+        muzzleFlash = 0.16;
+        shake = max(shake, 9);
+        audio.play(Sfx.gunshot);
+        audio.play(Sfx.punch, volume: 0.8);
+        for (var i = 0; i < 6; i++) {
+          final a = aim + (i - 2.5) * 0.06 + (rng.nextDouble() - 0.5) * 0.05;
+          final d = Offset(cos(a), sin(a));
+          bullets.add(Bullet(p.pos + d * 0.45, d, 30, true, life: 0.28, power: 0.5));
+        }
+      } else {
+        p.ammo--;
+        p.attackCd = 0.35;
+        p.shotT = 0.18;
+        muzzleFlash = 0.12;
+        shake = max(shake, 4);
+        audio.play(Sfx.gunshot);
+        bullets.add(Bullet(p.pos + dir * 0.45, dir, 34, true));
+      }
       flashPoly = lightPolygon(floor, p.pos, 7, 90);
-      shake = max(shake, 4);
-      audio.play(Sfx.gunshot);
-      bullets.add(Bullet(p.pos + dir * 0.45, dir, 34, true));
       // El disparo se oye: unos huyen, otros vienen.
       for (final e in floor.enemies) {
         if (!e.alive) continue;
-        if ((e.pos - p.pos).distance < 14) {
+        if ((e.pos - p.pos).distance < (shotgun ? 20 : 14)) {
           if (rng.nextDouble() < 0.4) {
             _makeFlee(e, 4);
           } else if (e.state == EState.patrol) {
@@ -673,15 +820,17 @@ class Game {
           }
         }
       }
-      if (p.ammo == 0) say('Última bala.', const Color(0xFFFF9060));
+      if (!shotgun && p.ammo == 0) say('Última bala.', const Color(0xFFFF9060));
+      if (shotgun && p.shells == 0) say('Último cartucho.', const Color(0xFFFF9060));
       return;
     }
-    if (p.hasPistol && p.ammo == 0) audio.play(Sfx.cock, volume: 0.6);
-    // Barra de hierro: te lanzas a por el que tengas delante y le golpeas.
-    p.attackCd = 0.5;
-    p.swingT = 0.25;
-    audio.play(Sfx.swing, volume: 0.7);
-    const reach = 3.0, range = 1.5;
+    // Cuerpo a cuerpo: te lanzas a por el que tengas delante y le golpeas.
+    // La barra llega más lejos; el cuchillo es más rápido y no se oye.
+    final knife = w == Weapon.knife;
+    p.attackCd = knife ? 0.32 : 0.5;
+    p.swingT = knife ? 0.18 : 0.25;
+    audio.play(Sfx.swing, volume: knife ? 0.35 : 0.7);
+    final reach = knife ? 2.2 : 3.0, range = knife ? 1.2 : 1.5;
     final boss = floor.boss;
     Offset? foe;
     var bestD = reach;
@@ -700,7 +849,8 @@ class Game {
     if (hitAt == null) {
       if (unarmedMsgT <= 0) {
         unarmedMsgT = 4;
-        say('La barra corta el aire. Acércate más.', const Color(0xFF999999));
+        say(knife ? 'El cuchillo corta el aire. Acércate más.' : 'La barra corta el aire. Acércate más.',
+            const Color(0xFF999999));
       }
       return;
     }
@@ -711,19 +861,19 @@ class Game {
       shake = max(shake, 3);
     }
     if (boss != null && boss.alive && (boss.pos - p.pos).distance <= range + 0.2) {
-      audio.play(Sfx.punch);
-      _hitBoss(0.5);
+      audio.play(Sfx.punch, volume: knife ? 0.5 : 1);
+      _hitBoss(knife ? 0.4 : 0.5);
       return;
     }
     for (final e in floor.enemies) {
       if (!e.alive || (e.pos - p.pos).distance > range) continue;
-      audio.play(Sfx.punch);
-      _hitEnemy(e, 2);
+      audio.play(Sfx.punch, volume: knife ? 0.5 : 1);
+      _hitEnemy(e, 2, silent: knife);
       break;
     }
   }
 
-  void _hitEnemy(Enemy e, int dmg) {
+  void _hitEnemy(Enemy e, int dmg, {bool silent = false}) {
     e.hp -= dmg;
     for (var i = 0; i < 8; i++) {
       final a = rng.nextDouble() * 2 * pi;
@@ -733,9 +883,14 @@ class Game {
       e.state = EState.dead;
       e.deadT = 0;
       kills++;
-      if (rng.nextDouble() < 0.4) floor.items.add(GroundItem(e.pos + const Offset(0.2, 0.1), ItemType.ammo));
+      if (rng.nextDouble() < 0.4) {
+        // Si llevas escopeta, a veces suelta cartuchos en vez de balas.
+        final drop = p.hasShotgun && rng.nextDouble() < 0.35 ? ItemType.shells : ItemType.ammo;
+        floor.items.add(GroundItem(e.pos + const Offset(0.2, 0.1), drop));
+      }
+      // A cuchillo, sin ruido: los demás solo se enteran si lo ven caer de cerca.
       for (final o in floor.enemies) {
-        if (o.alive && (o.pos - e.pos).distance < 9 && lineOfSight(floor, o.pos, e.pos)) _makeFlee(o, 5);
+        if (o.alive && (o.pos - e.pos).distance < (silent ? 4 : 9) && lineOfSight(floor, o.pos, e.pos)) _makeFlee(o, 5);
       }
     } else {
       _makeFlee(e, 4.5);
@@ -1276,7 +1431,7 @@ class Game {
       }
 
       // Cobardes: si les apuntas con la pistola, se acobardan.
-      if (e.state != EState.flee && los && p.hasPistol && p.ammo > 0 && dist < 8 &&
+      if (e.state != EState.flee && los && gunInHand && dist < 8 &&
           angleDiff((e.pos - p.pos).direction, p.angle) < 0.3) {
         e.fear += dt;
         if (e.fear > 0.9 && rng.nextDouble() < 0.6) _makeFlee(e, 4);
@@ -1461,7 +1616,7 @@ class Game {
         } else if (b.fromPlayer) {
           final boss = floor.boss;
           if (boss != null && boss.alive && (boss.pos - b.pos).distance < 0.55) {
-            _hitBoss(1);
+            _hitBoss(b.power);
             dead = true;
             break;
           }
@@ -1491,6 +1646,17 @@ class Game {
       p.hp = 0;
       _damage(0);
       _lose();
+      return;
+    }
+    if (p.vest > 0) {
+      // El chaleco para la bala: duele, pero no entra.
+      p.vest--;
+      p.hurtT = 0.3;
+      shake = max(shake, 6);
+      redFlash = max(redFlash, 0.25);
+      HapticFeedback.mediumImpact();
+      audio.play(Sfx.punch);
+      say(p.vest > 0 ? 'El chaleco para la bala.' : 'El chaleco para la bala y se rompe.', const Color(0xFFBBBBBB));
       return;
     }
     _damage(2);
