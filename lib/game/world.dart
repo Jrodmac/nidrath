@@ -135,12 +135,12 @@ class Enemy {
   int get look => (cigPhase * 997).floor() % 4;
 }
 
-/// El guardián de la caja: un tipo enorme con un cuchillo.
+/// El guardián de la caja: una criatura enorme con traje y garras.
 class Boss {
   Offset pos;
   double angle = pi / 2;
   double hp = bossHp;
-  double windup = 0; // >0: levantando el cuchillo
+  double windup = 0; // >0: levantando la garra
   double cooldown = 1;
   double stagger = 0;
   double repath = 0;

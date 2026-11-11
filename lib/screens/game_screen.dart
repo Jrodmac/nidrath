@@ -79,6 +79,7 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
     _joyOrigin = null;
     _joyKnob = Offset.zero;
     _runHeld = false;
+    input.look = 0;
     input.attack = input.action = input.magic = false;
   }
 
@@ -241,6 +242,19 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
           onPointerUp: (e) => _releaseJoy(e.pointer),
           onPointerCancel: (e) => _releaseJoy(e.pointer),
           child: CustomPaint(painter: _JoyPainter(_joyOrigin, _joyKnob, _joyRadius)),
+        ),
+      ),
+      // Resto de la pantalla: arrastrar el dedo gira la vista.
+      Positioned(
+        left: c.maxWidth * 0.45,
+        right: 0,
+        top: 70,
+        bottom: 0,
+        child: Listener(
+          behavior: HitTestBehavior.opaque,
+          onPointerMove: (e) {
+            if (!paused) input.look += e.delta.dx * 0.006;
+          },
         ),
       ),
       // Botonera de la derecha: ataque (o correr) grande en la esquina,
@@ -568,7 +582,9 @@ class _GameScreenState extends State<GameScreen> with SingleTickerProviderStateM
                 Text('La partida está congelada. Sigues en el mismo sitio.', style: _hudText(12, const Color(0xFF888888))),
                 const SizedBox(height: 14),
                 Text(
-                  'Joystick: moverse · al fondo o botón verde: correr\n'
+                  'Joystick: arriba avanzar, abajo retroceder, a los lados girar\n'
+                  'Arrastra el dedo por la derecha para mirar alrededor\n'
+                  'Joystick al fondo o botón verde: correr\n'
                   'Botón rojo: atacar (solo con arma)\n'
                   'Barra: mira al sicario y pulsa: te lanzas a por él\n'
                   'Botón de acción: registrar, esconderse, usar, escaleras\n'
@@ -799,6 +815,14 @@ class _MiniMapPainter extends CustomPainter {
     canvas.drawRect(
         Rect.fromCenter(center: Offset(g.p.pos.dx * cw, g.p.pos.dy * ch), width: cw * 1.5, height: ch * 1.5),
         Paint()..color = blink ? const Color(0xFFFFFFFF) : const Color(0xFFE8C468));
+    // Hacia dónde miras.
+    final at = Offset(g.p.pos.dx * cw, g.p.pos.dy * ch);
+    canvas.drawLine(
+        at,
+        at + Offset(cos(g.p.angle), sin(g.p.angle)) * cw * 4,
+        Paint()
+          ..color = const Color(0xFFFFFFFF)
+          ..strokeWidth = 1.5);
   }
 
   @override

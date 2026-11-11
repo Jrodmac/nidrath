@@ -8,7 +8,11 @@ import 'world.dart';
 const double maxPoints = 10;
 
 class GameInput {
+  /// Vista en primera persona: dy < 0 avanza, dy > 0 retrocede y dx gira.
   Offset move = Offset.zero;
+
+  /// Giro pendiente, en radianes, de arrastrar el dedo por la pantalla.
+  double look = 0;
   bool run = false;
   bool attack = false;
   bool action = false;
@@ -100,6 +104,7 @@ class Game {
   static const double coneHalf = 0.55;
   static const double coneLenBase = 13.0;
   static const double ambientBase = 2.6;
+  static const double turnSpeed = 2.8; // radianes por segundo con el joystick a tope
   double flashPower = 1;
   double flashOutT = 0;
   double nextFlashFail = 40;
@@ -177,7 +182,21 @@ class Game {
       say('Encuentra la Caja de Otros Mundos.', const Color(0xFFB98CFF));
       _checkpoint();
     }
+    _faceOpen();
     _updateLight();
+  }
+
+  /// Gira la vista hacia donde hay más espacio libre: nunca se llega de cara a una pared.
+  void _faceOpen() {
+    var best = -1.0;
+    for (var i = 0; i < 8; i++) {
+      final a = i * pi / 4;
+      final d = castRay(floor, p.pos.dx, p.pos.dy, cos(a), sin(a), 20);
+      if (d > best) {
+        best = d;
+        p.angle = a;
+      }
+    }
   }
 
   // --- Puntos de control -----------------------------------------------------------
@@ -334,6 +353,7 @@ class Game {
     input.action = false;
     input.magic = false;
     input.use = null;
+    input.look = 0;
   }
 
   void _updateFx(double dt) {
@@ -376,15 +396,20 @@ class Game {
 
   void _updatePlayer(double dt, GameInput input) {
     final mv = hiding != null ? Offset.zero : input.move;
-    final mag = min(1.0, mv.distance);
+    // Se mira girando y se anda hacia donde se mira (o de espaldas, más despacio).
+    final fwd = -mv.dy;
+    final mag = min(1.0, fwd.abs());
     final exhausted = p.energy <= 0;
+    if (hiding == null && transition <= 0.3) {
+      final turn = mv.dx.abs() < 0.18 ? 0.0 : (mv.dx.abs() - 0.18) / 0.82 * mv.dx.sign;
+      p.angle = (p.angle + turn.clamp(-1.0, 1.0) * turnSpeed * dt + input.look) % (2 * pi);
+    }
     p.moving = mag > 0.12 && transition <= 0.3;
-    p.running = p.moving && (input.run || mag > 0.92) && !exhausted;
+    p.running = p.moving && fwd > 0 && (input.run || mag > 0.92) && !exhausted;
     if (p.moving) {
-      p.angle = lerpAngle(p.angle, mv.direction, dt * 14);
-      final speed = (p.running ? 4.0 : 2.5) * mag * (exhausted ? 0.7 : 1);
+      final speed = (p.running ? 4.0 : 2.5) * mag * (exhausted ? 0.7 : 1) * (fwd < 0 ? 0.6 : 1);
       final before = p.pos;
-      p.pos = moveWithCollision(floor, p.pos, Offset(cos(mv.direction), sin(mv.direction)) * speed * dt, 0.28);
+      p.pos = moveWithCollision(floor, p.pos, Offset(cos(p.angle), sin(p.angle)) * fwd.sign * speed * dt, 0.28);
       p.vel = dt > 0 ? (p.pos - before) / dt : Offset.zero;
       p.walkPhase += dt * speed * 2.2;
       p.stillT = 0;
@@ -622,9 +647,10 @@ class Game {
       }
       return;
     }
+    // La bala va al sicario que tengas más o menos delante, sin girarte la vista.
     final target = _autoAim();
-    if (target != null) p.angle = (target - p.pos).direction;
-    final dir = Offset(cos(p.angle), sin(p.angle));
+    final aim = target != null ? (target - p.pos).direction : p.angle;
+    final dir = Offset(cos(aim), sin(aim));
     if (p.hasPistol && p.ammo > 0) {
       p.ammo--;
       p.attackCd = 0.35;
@@ -801,6 +827,7 @@ class Game {
     hiding = h;
     p.pos = h.pos;
     p.vel = Offset.zero;
+    _faceOpen(); // desde dentro se mira hacia fuera, no a la pared
     audio.play(Sfx.cock, volume: 0.4);
     // Solo te pillan si te están viendo justo al entrar.
     hidingSeen = floor.enemies.any((e) => e.alive && e.seesPlayer);
@@ -1062,6 +1089,7 @@ class Game {
     pendingFloor = null;
     fi = target;
     p.pos = tileCenter(pendingArrival!);
+    _faceOpen();
     _clearArrival();
     big(floorNames[fi].toUpperCase(), const Color(0xFFCCCCCC), 1.8);
     if (floor.firstVisit) {
@@ -1621,7 +1649,7 @@ class Game {
     redFlash = 0.8;
     zoomPunch = 1;
     big('EL CARNICERO', const Color(0xFFFF2020), 2.4);
-    say('Un tipo enorme sale de la sombra. Lleva un cuchillo de carnicero.', const Color(0xFFFF7070));
+    say('Algo enorme sale de la sombra. Lleva traje, pero eso no es un hombre.', const Color(0xFFFF7070));
     say('Guarda la caja. Hará falta mucho plomo para tumbarlo.', const Color(0xFFFFAAAA));
   }
 
@@ -1681,7 +1709,7 @@ class Game {
             final a = rng.nextDouble() * 2 * pi;
             sparks.add(Spark(p.pos, Offset(cos(a), sin(a)) * (1 + rng.nextDouble() * 2), 0.4, const Color(0xFFAA0000)));
           }
-          say(['¡El cuchillo te abre el brazo!', '¡Te apuñala!', '¡Un tajo en el costado!'][rng.nextInt(3)],
+          say(['¡Las garras te abren el brazo!', '¡Un zarpazo!', '¡Te desgarra el costado!'][rng.nextInt(3)],
               const Color(0xFFFF6060));
         }
       }

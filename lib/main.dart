@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'game/audio.dart';
+import 'game/thug_art.dart';
 import 'screens/splash_screen.dart';
 
 Future<void> main() async {
@@ -13,6 +14,7 @@ Future<void> main() async {
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   // Los sonidos se sintetizan en segundo plano mientras arranca la splash.
   GameAudio.instance.init();
+  ThugArt.load();
   runApp(const NidrathApp());
 }
 
