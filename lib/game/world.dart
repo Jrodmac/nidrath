@@ -92,11 +92,14 @@ class Lamp {
   final int mode; // 0 estable, 1 parpadeo, 2 revienta al acercarse
   final String? sign;
   final Color color;
+  /// Letrero de tienda: dirección de la fachada y media anchura del panel.
+  final Offset? along;
+  final double span;
   bool alive = true;
   double level = 1;
   double timer = 0;
   List<Offset> poly = const [];
-  Lamp(this.pos, this.radius, this.mode, this.color, {this.sign});
+  Lamp(this.pos, this.radius, this.mode, this.color, {this.sign, this.along, this.span = 0});
 }
 
 enum EState { patrol, chase, aim, flee, dead }
@@ -865,7 +868,9 @@ World generateWorld(Random rng) {
       final a = door.first, b = door.last;
       final edge = Offset((a.x + b.x) / 2 + 0.5 + out.x * 0.5, (a.y + b.y) / 2 + 0.5 + out.y * 0.5);
       final l = Lamp(edge, 3.4, rng.nextDouble() < 0.7 ? 1 : 0, neon[rng.nextInt(neon.length)],
-          sign: signs[si++ % signs.length]);
+          sign: signs[si++ % signs.length],
+          along: Offset(out.y.abs().toDouble(), out.x.abs().toDouble()),
+          span: door.length / 2 - 0.06);
       l.poly = lightPolygon(f, edge + Offset(out.x * 0.6, out.y * 0.6), l.radius, 72);
       f.lamps.add(l);
     }

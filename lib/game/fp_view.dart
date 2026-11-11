@@ -1032,33 +1032,11 @@ class FpView {
         });
         continue;
       }
-      final on = level > 0.1;
-      final small = l.mode == 3;
-      _put(l.pos, sign.length * 0.12 + 0.2, (c, sx, sc, fy) {
-        final at = Offset(sx, fy - (small ? 1.5 : 1.42) * sc);
-        final fs = sc * (small ? 0.15 : 0.24);
-        if (on) _glow(c, at, min(H * 0.6, (sign.length * 0.1 + 0.3) * sc), l.color.withValues(alpha: 0.22 * level));
-        if (fs < 4 || fs > 220) {
-          if (on) c.drawCircle(at, 1.5, Paint()..color = l.color);
-          return;
-        }
-        final tp = TextPainter(
-          text: TextSpan(
-            text: sign,
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontWeight: FontWeight.w900,
-              fontSize: fs,
-              letterSpacing: fs * 0.1,
-              color: on ? l.color : l.color.withValues(alpha: 0.18),
-              shadows: on ? [Shadow(color: l.color, blurRadius: fs * 0.4 * level)] : null,
-            ),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        tp.paint(c, at - Offset(tp.width / 2, tp.height / 2));
-        tp.dispose();
-      });
+      if (l.along != null) {
+        _shopSign(l, sign, level);
+      } else {
+        _hangingSign(l, sign, level);
+      }
     }
 
     for (final b in g.bullets) {
@@ -1092,6 +1070,167 @@ class FpView {
   }
 
   /// El helicóptero baja al helipuerto y, al final, se va contigo dentro.
+  // --- Letreros ---------------------------------------------------------------------
+
+  /// Transformación en perspectiva que lleva el rectángulo (0,0)-(lw,lh) al
+  /// cuadrilátero [q] (arriba-izq, arriba-der, abajo-der, abajo-izq).
+  static Float64List _quadMatrix(List<Offset> q, double lw, double lh) {
+    final x0 = q[0].dx, y0 = q[0].dy, x1 = q[1].dx, y1 = q[1].dy;
+    final x2 = q[2].dx, y2 = q[2].dy, x3 = q[3].dx, y3 = q[3].dy;
+    final dx1 = x1 - x2, dx2 = x3 - x2, dx3 = x0 - x1 + x2 - x3;
+    final dy1 = y1 - y2, dy2 = y3 - y2, dy3 = y0 - y1 + y2 - y3;
+    final det = dx1 * dy2 - dx2 * dy1;
+    final gg = det == 0 ? 0.0 : (dx3 * dy2 - dx2 * dy3) / det;
+    final hh = det == 0 ? 0.0 : (dx1 * dy3 - dx3 * dy1) / det;
+    final a = x1 - x0 + gg * x1, b = x3 - x0 + hh * x3;
+    final d = y1 - y0 + gg * y1, e = y3 - y0 + hh * y3;
+    return Float64List.fromList([
+      a / lw, d / lw, 0, gg / lw, //
+      b / lh, e / lh, 0, hh / lh,
+      0, 0, 1, 0,
+      x0, y0, 0, 1,
+    ]);
+  }
+
+  /// Letrero de tienda: un panel oscuro colgado del techo sobre la entrada,
+  /// a lo largo de la fachada, con las letras retroiluminadas.
+  void _shopSign(Lamp l, String text, double level) {
+    final al = l.along!;
+    final c0 = l.pos;
+    const zTop = 1.7, zBot = 1.36;
+    // El letrero da al pasillo, hacia donde se proyecta su luz; desde dentro
+    // de la tienda solo se ve la trasera.
+    var lx = 0.0, ly = 0.0;
+    for (final q in l.poly) {
+      lx += q.dx;
+      ly += q.dy;
+    }
+    final toHall = l.poly.isEmpty ? Offset.zero : Offset(lx / l.poly.length, ly / l.poly.length) - c0;
+    final nrm = Offset(al.dy, al.dx);
+    final hallSide = toHall.dx * nrm.dx + toHall.dy * nrm.dy;
+    final camSide = (px - c0.dx) * nrm.dx + (py - c0.dy) * nrm.dy;
+    final front = hallSide * camSide >= 0;
+    // Extremos de izquierda a derecha según se mira.
+    var e0 = c0 - al * l.span, e1 = c0 + al * l.span;
+    if ((e0.dx - px) * rx + (e0.dy - py) * ry > (e1.dx - px) * rx + (e1.dy - py) * ry) {
+      final t = e0;
+      e0 = e1;
+      e1 = t;
+    }
+    final pts = <Offset>[];
+    var minD = double.infinity, x0 = double.infinity, x1 = -double.infinity;
+    for (final (e, z) in [(e0, zTop), (e1, zTop), (e1, zBot), (e0, zBot)]) {
+      if (!_proj(e)) return;
+      minD = min(minD, _d);
+      final pt = Offset(_sx, horizon - (z - eye) * _sc);
+      pts.add(pt);
+      x0 = min(x0, pt.dx);
+      x1 = max(x1, pt.dx);
+    }
+    if (x1 < 0 || x0 > W || minD > 24) return;
+    _lightAt(c0.dx, c0.dy);
+    final body = _lit(const Color(0xFF2A2A30));
+    final rim = _lit(const Color(0xFF5A5A62));
+    final ink = _lit(l.color, 0.3);
+    final on = level > 0.1;
+    // Altura del techo en cada extremo, para las varillas.
+    final ceil0 = horizon - (wallH - eye) * (pts[3].dy - pts[0].dy) / (zTop - zBot);
+    final ceil1 = horizon - (wallH - eye) * (pts[2].dy - pts[1].dy) / (zTop - zBot);
+    _items.add(_Item(minD, x0, x1, (c) {
+      final hpx = max(pts[3].dy - pts[0].dy, pts[2].dy - pts[1].dy);
+      final shape = Path()..addPolygon(pts, true);
+      final rod = Paint()
+        ..color = rim
+        ..strokeWidth = max(1.0, hpx * 0.035);
+      for (final k in [0.12, 0.88]) {
+        final top = Offset.lerp(pts[0], pts[1], k)!;
+        c.drawLine(top, Offset(top.dx, ui.lerpDouble(ceil0, ceil1, k)!), rod);
+      }
+      c.drawPath(shape, Paint()..color = body);
+      c.drawPath(
+          shape,
+          Paint()
+            ..color = rim
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = max(1.0, hpx * 0.05));
+      if (!front || hpx < 5) return;
+      if (on) {
+        final mid = Offset.lerp(pts[0], pts[2], 0.5)!;
+        _glow(c, mid, min(H * 0.5, hpx * 2.4), l.color.withValues(alpha: 0.14 * level));
+      }
+      final tp = TextPainter(
+        text: TextSpan(
+          text: text,
+          style: TextStyle(
+            fontFamily: 'Roboto',
+            fontWeight: FontWeight.w800,
+            fontSize: 100,
+            letterSpacing: 12,
+            color: on ? Color.lerp(l.color, Colors.white, 0.35)!.withValues(alpha: 0.45 + 0.55 * level) : ink,
+            shadows: on ? [Shadow(color: l.color, blurRadius: 24 * level)] : null,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final lh = tp.height * 1.3;
+      final lw = lh * (2 * l.span) / (zTop - zBot);
+      final k = min(1.0, 0.86 * lw / tp.width);
+      c.save();
+      c.transform(_quadMatrix(pts, lw, lh));
+      c.translate(lw / 2, lh / 2);
+      c.scale(k);
+      tp.paint(c, Offset(-tp.width / 2, -tp.height / 2));
+      c.restore();
+      tp.dispose();
+    }));
+  }
+
+  /// SALIDA, ASCENSOR: una caja luminosa colgada del techo, como las de verdad.
+  void _hangingSign(Lamp l, String text, double level) {
+    final on = level > 0.1;
+    final w = text.length * 0.075 + 0.14;
+    _lightAt(l.pos.dx, l.pos.dy);
+    final frame = _lit(const Color(0xFF3A3A40));
+    final dark = _lit(l.color, 0.25);
+    final grey = _lit(const Color(0xFF9A9A9A), 0.6);
+    _put(l.pos, w / 2, (c, sx, sc, fy) {
+      final top = fy - 1.66 * sc, bot = fy - 1.45 * sc;
+      final ceil = fy - wallH * sc;
+      final box = Rect.fromLTRB(sx - w / 2 * sc, top, sx + w / 2 * sc, bot);
+      final rod = Paint()
+        ..color = frame
+        ..strokeWidth = max(1.0, 0.012 * sc);
+      for (final k in [-0.3, 0.3]) {
+        c.drawLine(Offset(sx + k * w * sc, top), Offset(sx + k * w * sc, ceil), rod);
+      }
+      if (on) _glow(c, box.center, min(H * 0.4, w * 0.5 * sc), l.color.withValues(alpha: 0.25 * level));
+      c.drawRect(box.inflate(max(1.0, 0.015 * sc)), Paint()..color = frame);
+      c.drawRect(box, Paint()..color = on ? Color.lerp(const Color(0xFF101010), l.color, 0.75 * level)! : dark);
+      final fs = (bot - top) * 0.62;
+      if (fs < 4) return;
+      final tp = TextPainter(
+        text: TextSpan(
+          text: text,
+          style: TextStyle(
+            fontFamily: 'Roboto',
+            fontWeight: FontWeight.w800,
+            fontSize: fs,
+            letterSpacing: fs * 0.08,
+            color: on ? Colors.white.withValues(alpha: 0.6 + 0.4 * level) : grey,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final k = min(1.0, box.width * 0.9 / tp.width);
+      c.save();
+      c.translate(box.center.dx, box.center.dy);
+      c.scale(k);
+      tp.paint(c, Offset(-tp.width / 2, -tp.height / 2));
+      c.restore();
+      tp.dispose();
+    });
+  }
+
   void _putHelicopter(Offset pad) {
     var alt = (1 - g.heliT / Game.heliLandTime).clamp(0.0, 1.0);
     if (g.won) alt = min(1.5, g.endT * 0.35);
